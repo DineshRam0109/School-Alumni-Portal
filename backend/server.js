@@ -106,6 +106,26 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// ✅ Root route - Add this
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Welcome to Alumni Portal API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth/*',
+      users: '/api/users/*',
+      schools: '/api/schools/*',
+      connections: '/api/connections/*',
+      messages: '/api/messages/*',
+      groups: '/api/groups/*'
+    },
+    documentation: 'All API routes are under /api/*'
+  });
+});
+
 // 9. Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err.message);
@@ -123,7 +143,8 @@ app.use('*', (req, res) => {
   console.log(`❌ 404: ${req.method} ${req.originalUrl}`);
   res.status(404).json({
     success: false,
-    message: `Route ${req.originalUrl} not found`
+    message: `Route ${req.originalUrl} not found`,
+    hint: 'All API endpoints are under /api/*'
   });
 });
 
