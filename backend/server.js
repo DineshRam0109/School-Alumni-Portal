@@ -7,12 +7,40 @@ require('dotenv').config();
 
 const app = express();
 
-// 1. CORS FIRST - before any other middleware
+// ✅ IMPROVED CORS Configuration - Handles multiple origins
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'https://school-alumni-portal-frontend.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:3001'
+].filter(Boolean); // Remove undefined values
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Remove trailing slash if present
+    const cleanOrigin = origin.replace(/\/$/, '');
+    
+    // Check if origin is in allowed list
+    const isAllowed = allowedOrigins.some(allowed => {
+      const cleanAllowed = allowed.replace(/\/$/, '');
+      return cleanOrigin === cleanAllowed;
+    });
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.log('❌ CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 600 // Cache preflight for 10 minutes
 }));
 
 // 2. Body parsing middleware - BEFORE routes
@@ -25,10 +53,10 @@ app.use(helmet({
   contentSecurityPolicy: false
 }));
 
-// 4. Global rate limiting - LESS STRICT
+// 4. Global rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000, // Very high limit for testing
+  max: 1000,
   message: 'Too many requests from this IP, please try again later'
 });
 app.use('/api/', limiter);
@@ -77,7 +105,7 @@ const groupRoutes = require('./routes/groups');
 const schoolAdminRoutes = require('./routes/schoolAdmin');
 const superAdminRoutes = require('./routes/superAdmin');
 
-// 7. Register routes - AUTH FIRST
+// 7. Register routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/schools', schoolRoutes);
@@ -106,7 +134,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ✅ Root route - Add this
+// Root route
 app.get('/', (req, res) => {
   res.json({
     success: true,
@@ -150,12 +178,14 @@ app.use('*', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 Server running on port ${PORT}`);
-  console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 API Base: http://localhost:${PORT}/api`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/api/health\n`);
-});
-
+// Only start server locally (not in Vercel)
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`\n🚀 Server running on port ${PORT}`);
+    console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 API Base: http://localhost:${PORT}/api`);
+    console.log(`🔗 Health check: http://localhost:${PORT}/api/health\n`);
+  });
+}
 
 module.exports = app;
