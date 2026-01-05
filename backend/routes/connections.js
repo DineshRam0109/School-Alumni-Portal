@@ -9,11 +9,9 @@ router.use(protect);
 // Get connections (multiple versions)
 router.get('/', connectionController.getMyConnections); // Use the detailed one as default
 router.get('/with-details', connectionController.getConnectionsWithDetails);
-router.get('/simple', connectionController.getConnections); // Simple version
 
 // Get connection requests
 router.get('/pending', connectionController.getPendingRequests);
-router.get('/requests', connectionController.getRequests);
 
 // Connection status
 router.get('/status/:userId', connectionController.getConnectionStatus);

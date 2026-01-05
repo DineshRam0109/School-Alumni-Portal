@@ -1,8 +1,9 @@
 const db = require('../config/database');
 
+
 // @desc    Get all schools
 // @route   GET /api/schools
-// @access  Public
+// @access  Publicz
 exports.getAllSchools = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, city, country } = req.query;
@@ -11,19 +12,22 @@ exports.getAllSchools = async (req, res) => {
     let query = `SELECT * FROM schools WHERE is_active = TRUE`;
     const params = [];
 
-    if (search) {
+    // Search in school name with partial match
+    if (search && search.trim()) {
       query += ` AND school_name LIKE ?`;
-      params.push(`%${search}%`);
+      params.push(`%${search.trim()}%`);
     }
 
-    if (city) {
-      query += ` AND city = ?`;
-      params.push(city);
+    // City filter - CASE INSENSITIVE and TRIMMED
+    if (city && city.trim()) {
+      query += ` AND LOWER(TRIM(city)) = LOWER(TRIM(?))`;
+      params.push(city.trim());
     }
 
-    if (country) {
-      query += ` AND country = ?`;
-      params.push(country);
+    // Country filter - CASE INSENSITIVE and TRIMMED
+    if (country && country.trim()) {
+      query += ` AND LOWER(TRIM(country)) = LOWER(TRIM(?))`;
+      params.push(country.trim());
     }
 
     query += ` ORDER BY school_name ASC LIMIT ? OFFSET ?`;
@@ -48,9 +52,26 @@ exports.getAllSchools = async (req, res) => {
       });
     }
 
-    const [totalCount] = await db.query(
-      'SELECT COUNT(*) as total FROM schools WHERE is_active = TRUE'
-    );
+    // Get total count with same filters
+    let countQuery = 'SELECT COUNT(*) as total FROM schools WHERE is_active = TRUE';
+    const countParams = [];
+
+    if (search && search.trim()) {
+      countQuery += ` AND school_name LIKE ?`;
+      countParams.push(`%${search.trim()}%`);
+    }
+
+    if (city && city.trim()) {
+      countQuery += ` AND LOWER(TRIM(city)) = LOWER(TRIM(?))`;
+      countParams.push(city.trim());
+    }
+
+    if (country && country.trim()) {
+      countQuery += ` AND LOWER(TRIM(country)) = LOWER(TRIM(?))`;
+      countParams.push(country.trim());
+    }
+
+    const [totalCount] = await db.query(countQuery, countParams);
 
     res.json({
       success: true,
@@ -145,27 +166,31 @@ exports.getSchoolAlumni = async (req, res) => {
 
     let query = `
       SELECT u.user_id, u.first_name, u.last_name, u.email, u.profile_picture,
-             u.current_city, u.current_country, ae.start_year, ae.end_year, ae.degree_level,
+             u.current_city, u.current_country, u.is_active,
+             ae.start_year, ae.end_year, ae.degree_level, ae.field_of_study,
              we.company_name, we.position
-      FROM users u
-      JOIN alumni_education ae ON u.user_id = ae.user_id
+      FROM alumni_education ae
+      JOIN users u ON ae.user_id = u.user_id
       LEFT JOIN (
         SELECT user_id, company_name, position
         FROM work_experience
         WHERE is_current = TRUE
+        LIMIT 1
       ) we ON u.user_id = we.user_id
-      WHERE ae.school_id = ? AND u.is_active = TRUE
+      WHERE ae.school_id = ?
     `;
     const params = [id];
+
+    // REMOVED: AND u.is_active = TRUE filter to show all alumni
 
     if (batch_year) {
       query += ` AND ae.end_year = ?`;
       params.push(batch_year);
     }
 
-    if (search) {
+    if (search && search.trim()) {
       query += ` AND (u.first_name LIKE ? OR u.last_name LIKE ?)`;
-      const searchTerm = `%${search}%`;
+      const searchTerm = `%${search.trim()}%`;
       params.push(searchTerm, searchTerm);
     }
 
@@ -176,16 +201,22 @@ exports.getSchoolAlumni = async (req, res) => {
 
     // Get total count
     let countQuery = `
-      SELECT COUNT(DISTINCT u.user_id) as total
-      FROM users u
-      JOIN alumni_education ae ON u.user_id = ae.user_id
-      WHERE ae.school_id = ? AND u.is_active = TRUE
+      SELECT COUNT(DISTINCT ae.user_id) as total
+      FROM alumni_education ae
+      JOIN users u ON ae.user_id = u.user_id
+      WHERE ae.school_id = ?
     `;
     const countParams = [id];
 
     if (batch_year) {
       countQuery += ` AND ae.end_year = ?`;
       countParams.push(batch_year);
+    }
+
+    if (search && search.trim()) {
+      countQuery += ` AND (u.first_name LIKE ? OR u.last_name LIKE ?)`;
+      const searchTerm = `%${search.trim()}%`;
+      countParams.push(searchTerm, searchTerm);
     }
 
     const [countResult] = await db.query(countQuery, countParams);
@@ -209,9 +240,7 @@ exports.getSchoolAlumni = async (req, res) => {
   }
 };
 
-// @desc    Create school (Super Admin only)
-// @route   POST /api/schools
-// @access  Private/SuperAdmin
+// Export all other existing functions...
 exports.createSchool = async (req, res) => {
   try {
     const {
@@ -233,7 +262,6 @@ exports.createSchool = async (req, res) => {
       });
     }
 
-    // Check if school code exists
     const [existing] = await db.query(
       'SELECT school_id FROM schools WHERE school_code = ?',
       [school_code]
@@ -267,9 +295,6 @@ exports.createSchool = async (req, res) => {
   }
 };
 
-// @desc    Update school
-// @route   PUT /api/schools/:id
-// @access  Private/SuperAdmin/SchoolAdmin
 exports.updateSchool = async (req, res) => {
   try {
     const { id } = req.params;
@@ -284,7 +309,6 @@ exports.updateSchool = async (req, res) => {
       description
     } = req.body;
 
-    // Check if user is school admin for this school
     if (req.user.role === 'school_admin') {
       const [adminCheck] = await db.query(
         'SELECT * FROM school_admins WHERE user_id = ? AND school_id = ?',
@@ -326,14 +350,10 @@ exports.updateSchool = async (req, res) => {
   }
 };
 
-// @desc    Get school statistics
-// @route   GET /api/schools/:id/statistics
-// @access  Private
 exports.getSchoolStatistics = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Execute all queries in parallel for better performance
     const [totalAlumni, batchStats, locationStats, companyStats, recentRegistrations] = await Promise.all([
       db.query(
         'SELECT COUNT(DISTINCT user_id) as total FROM alumni_education WHERE school_id = ?',
@@ -506,127 +526,159 @@ exports.getAlumniBatches = async (req, res) => {
   }
 };
 
-// @desc    Get school admin's assigned school
-// @route   GET /api/schools/my-school
-// @access  Private/SchoolAdmin
-exports.getMySchool = async (req, res) => {
-  try {
-    const [schools] = await db.query(
-      `SELECT s.* FROM schools s
-       JOIN school_admins sa ON s.school_id = sa.school_id
-       WHERE sa.user_id = ? AND s.is_active = TRUE`,
-      [req.user.user_id]
-    );
 
-    if (!schools.length) {
-      return res.json({
-        success: true,
-        school: null,
-        message: 'No school assigned'
+
+
+
+
+
+exports.getSchoolAnalyticsById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Verify access: super_admin can access any school, school_admin only their school
+    if (req.user.role === 'school_admin' && req.user.school_id !== parseInt(id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
       });
     }
 
+    // Registration trend (last 12 months)
+    const [registrationTrend] = await db.query(
+      `SELECT DATE_FORMAT(u.created_at, '%Y-%m') as month, COUNT(*) as count
+       FROM users u
+       JOIN alumni_education ae ON u.user_id = ae.user_id
+       WHERE ae.school_id = ? 
+         AND u.created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+         AND u.role = 'alumni'
+       GROUP BY month
+       ORDER BY month ASC`,
+      [id]
+    );
+
+    // Location distribution
+    const [locationStats] = await db.query(
+      `SELECT u.current_city, u.current_country, COUNT(*) as count
+       FROM users u
+       JOIN alumni_education ae ON u.user_id = ae.user_id
+       WHERE ae.school_id = ? 
+         AND u.current_city IS NOT NULL
+         AND u.is_active = TRUE
+         AND u.role = 'alumni'
+       GROUP BY u.current_city, u.current_country
+       ORDER BY count DESC
+       LIMIT 10`,
+      [id]
+    );
+
+    // Industry distribution
+    const [industryStats] = await db.query(
+      `SELECT we.industry, COUNT(*) as count
+       FROM work_experience we
+       JOIN alumni_education ae ON we.user_id = ae.user_id
+       WHERE ae.school_id = ? 
+         AND we.is_current = TRUE 
+         AND we.industry IS NOT NULL
+       GROUP BY we.industry
+       ORDER BY count DESC
+       LIMIT 10`,
+      [id]
+    );
+
+    // Events by type
+    const [eventsByType] = await db.query(
+      `SELECT event_type, COUNT(*) as count
+       FROM events 
+       WHERE school_id = ? AND is_active = TRUE
+       GROUP BY event_type`,
+      [id]
+    );
+
+    // Top attended events
+    const [topEvents] = await db.query(
+      `SELECT e.title, e.event_date, COUNT(er.registration_id) as attendee_count
+       FROM events e
+       LEFT JOIN event_registrations er ON e.event_id = er.event_id
+       WHERE e.school_id = ? AND e.is_active = TRUE
+       GROUP BY e.event_id
+       ORDER BY attendee_count DESC
+       LIMIT 10`,
+      [id]
+    );
+
     res.json({
       success: true,
-      school: schools[0]
+      analytics: {
+        registration_trend: registrationTrend,
+        location_distribution: locationStats,
+        industry_distribution: industryStats,
+        events_by_type: eventsByType,
+        top_events: topEvents
+      }
     });
   } catch (error) {
-    console.error('Get my school error:', error);
+    console.error('Get school analytics error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch school'
+      message: 'Failed to fetch analytics',
+      error: error.message
     });
   }
 };
 
-// @desc    Verify alumni education
-// @route   PATCH /api/schools/verify-education/:educationId
-// @access  Private/SchoolAdmin
-exports.verifyAlumniEducation = async (req, res) => {
+exports.updateSchoolLogo = async (req, res) => {
   try {
-    const { educationId } = req.params;
-
-    // Check if user is school admin for this education record's school
-    const [education] = await db.query(
-      `SELECT ae.*, sa.user_id as admin_id 
-       FROM alumni_education ae
-       LEFT JOIN school_admins sa ON ae.school_id = sa.school_id AND sa.user_id = ?
-       WHERE ae.education_id = ?`,
-      [req.user.user_id, educationId]
-    );
-
-    if (!education.length) {
-      return res.status(404).json({
-        success: false,
-        message: 'Education record not found'
-      });
-    }
-
-    if (!education[0].admin_id && req.user.role !== 'super_admin') {
+    const schoolId = req.params.id;
+    
+    // Verify user is school admin
+    if (req.user.role !== 'school_admin') {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to verify this education record'
+        message: 'Only school administrators can update school logo'
       });
     }
-
+    
+    // Verify admin manages this school
+    if (req.user.school_id !== parseInt(schoolId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only update your own school logo'
+      });
+    }
+    
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload an image'
+      });
+    }
+    
+    // Store clean path (like userController does)
+    const filePath = req.file.path.replace(/\\/g, '/').replace(/^uploads\//, '');
+    
+    // Update school logo in database (store without timestamp)
     await db.query(
-      `UPDATE alumni_education 
-       SET is_verified = TRUE, verified_by = ?, verified_at = NOW()
-       WHERE education_id = ?`,
-      [req.user.user_id, educationId]
+      'UPDATE schools SET logo = ? WHERE school_id = ?',
+      [filePath, schoolId]
     );
-
+    
+    // Add timestamp for cache busting in response
+    const timestamp = Date.now();
+    const logoWithTimestamp = `uploads/${filePath}?upload=${timestamp}`;
+    
     res.json({
       success: true,
-      message: 'Education verified successfully'
+      message: 'School logo updated successfully',
+      logo: logoWithTimestamp
     });
+    
   } catch (error) {
-    console.error('Verify education error:', error);
+    console.error('Upload school logo error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to verify education'
-    });
-  }
-};
-
-// @desc    Get unverified alumni for school admin
-// @route   GET /api/schools/unverified-alumni
-// @access  Private/SchoolAdmin
-exports.getUnverifiedAlumni = async (req, res) => {
-  try {
-    // Get school admin's school
-    const [schools] = await db.query(
-      'SELECT school_id FROM school_admins WHERE user_id = ?',
-      [req.user.user_id]
-    );
-
-    if (!schools.length) {
-      return res.status(403).json({
-        success: false,
-        message: 'No school assigned'
-      });
-    }
-
-    const schoolId = schools[0].school_id;
-
-    const [unverified] = await db.query(
-      `SELECT ae.*, u.first_name, u.last_name, u.email, u.profile_picture
-       FROM alumni_education ae
-       JOIN users u ON ae.user_id = u.user_id
-       WHERE ae.school_id = ? AND ae.is_verified = FALSE
-       ORDER BY ae.created_at DESC`,
-      [schoolId]
-    );
-
-    res.json({
-      success: true,
-      unverified_alumni: unverified
-    });
-  } catch (error) {
-    console.error('Get unverified alumni error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch unverified alumni'
+      message: 'Failed to upload school logo',
+      error: error.message
     });
   }
 };

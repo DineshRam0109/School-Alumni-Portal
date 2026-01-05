@@ -1,6 +1,27 @@
 const db = require('../config/database');
 const bcrypt = require('bcryptjs');
+const { sendPasswordChangedEmail } = require('../utils/emailService');
+const { getFileUrl, formatPathForDatabase, getCompleteFileUrl } = require('../utils/profilePictureUtils');
 
+const formatUserResponse = (req, user, isSchoolAdmin = false) => {
+  const formattedUser = {
+    ...user,
+    profile_picture: user.profile_picture 
+      ? getCompleteFileUrl(req, user.profile_picture)
+      : null
+  };
+  
+  if (isSchoolAdmin) {
+    formattedUser.role = 'school_admin';
+    formattedUser.user_id = user.admin_id;
+  }
+  
+  return formattedUser;
+};
+
+// @desc    Get user by ID with complete profile data
+// @route   GET /api/users/:id
+// @access  Private
 exports.getUserById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -17,7 +38,9 @@ exports.getUserById = async (req, res) => {
     );
 
     if (users.length > 0) {
-      // Regular user found - get their education, work, achievements
+      const user = users[0];
+      
+      // Get education data
       const [education] = await db.query(
         `SELECT ae.*, s.school_name, s.city, s.logo
          FROM alumni_education ae
@@ -27,15 +50,15 @@ exports.getUserById = async (req, res) => {
         [id]
       );
 
-      const [work] = await db.query(
+      // Get work experience
+      const [workExperience] = await db.query(
         `SELECT * FROM work_experience 
          WHERE user_id = ? 
-         ORDER BY 
-           CASE WHEN is_current = TRUE THEN 0 ELSE 1 END,
-           start_date DESC`,
+         ORDER BY start_date DESC, is_current DESC`,
         [id]
       );
 
+      // Get achievements
       const [achievements] = await db.query(
         `SELECT * FROM achievements 
          WHERE user_id = ? 
@@ -43,19 +66,22 @@ exports.getUserById = async (req, res) => {
         [id]
       );
 
+      const completeProfile = {
+        ...user,
+        profile_picture: user.profile_picture 
+          ? getCompleteFileUrl(req, user.profile_picture)
+          : null,
+        education: education || [],
+        work_experience: workExperience || [],
+        achievements: achievements || [],
+      };
+
       return res.json({
         success: true,
-        user: {
-          ...users[0],
-          education,
-          work_experience: work,
-          achievements
-        }
+        user: completeProfile
       });
     }
 
-    // If not found in users table, return 404 
-    // (School admins should use /school-admins/:id endpoint)
     return res.status(404).json({
       success: false,
       message: 'User not found'
@@ -71,9 +97,6 @@ exports.getUserById = async (req, res) => {
   }
 };
 
-// @desc    Update user profile
-// @route   PUT /api/users/profile
-// @access  Private
 exports.updateProfile = async (req, res) => {
   try {
     const {
@@ -128,10 +151,12 @@ exports.updateProfile = async (req, res) => {
         [req.user.user_id]
       );
 
+      const admin = formatUserResponse(req, updatedAdmin[0], true);
+
       return res.json({
         success: true,
         message: 'Profile updated successfully',
-        user: updatedAdmin[0]
+        user: admin
       });
     }
 
@@ -203,10 +228,12 @@ exports.updateProfile = async (req, res) => {
       [req.user.user_id]
     );
 
+    const user = formatUserResponse(req, updatedUser[0]);
+
     res.json({
       success: true,
       message: 'Profile updated successfully',
-      user: updatedUser[0]
+      user
     });
   } catch (error) {
     console.error('Update profile error:', error);
@@ -218,43 +245,125 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
-// @desc    Upload profile picture
-// @route   POST /api/users/profile-picture
-// @access  Private
 exports.uploadProfilePicture = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'Please upload an image'
+        message: 'Please upload an image file'
       });
     }
 
-    const profilePicturePath = `/uploads/profiles/${req.file.filename}`;
+    const userId = req.user.user_id;
+    const filePath = req.file.path.replace(/\\/g, '/');
+    
+    // ✅ GET OLD PROFILE PICTURE BEFORE UPDATE
+    const [users] = await db.query(
+      'SELECT profile_picture FROM users WHERE user_id = ?',
+      [userId]
+    );
 
-    // Update appropriate table based on user role
-    if (req.user.role === 'school_admin') {
-      await db.query(
-        'UPDATE school_admins SET profile_picture = ? WHERE admin_id = ?',
-        [profilePicturePath, req.user.user_id]
-      );
-    } else {
-      await db.query(
-        'UPDATE users SET profile_picture = ? WHERE user_id = ?',
-        [profilePicturePath, req.user.user_id]
-      );
+    const oldProfilePicture = users[0]?.profile_picture;
+
+    // Update database with new picture
+    await db.query(
+      'UPDATE users SET profile_picture = ? WHERE user_id = ?',
+      [filePath, userId]
+    );
+
+    // ✅ DELETE OLD FILE IF EXISTS
+    if (oldProfilePicture && oldProfilePicture !== filePath) {
+      const fs = require('fs');
+      const path = require('path');
+      const oldFilePath = path.join(__dirname, '..', oldProfilePicture);
+      
+      fs.unlink(oldFilePath, (err) => {
+        if (err && err.code !== 'ENOENT') {
+          console.error('Error deleting old profile picture:', err);
+        }
+      });
     }
+
+    // Get updated user data
+    const [updatedUsers] = await db.query(
+      `SELECT user_id, email, first_name, last_name, role, profile_picture, 
+              phone, current_city, current_country, bio, is_verified, is_active, created_at
+       FROM users WHERE user_id = ?`,
+      [userId]
+    );
+
+    const user = formatUserResponse(req, updatedUsers[0]);
 
     res.json({
       success: true,
       message: 'Profile picture uploaded successfully',
-      profile_picture: profilePicturePath
+      user
     });
   } catch (error) {
     console.error('Upload profile picture error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to upload profile picture',
+      error: error.message
+    });
+  }
+};
+
+exports.deleteAlumni = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const schoolAdminId = req.user.user_id;
+    const schoolId = req.user.school_id;
+
+    // Check if user is school admin
+    if (req.user.role !== 'school_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only school administrators can delete alumni'
+      });
+    }
+
+    // Check if alumni exists and belongs to this school
+    const [alumni] = await db.query(
+      `SELECT u.user_id, u.first_name, u.last_name, u.email
+       FROM users u
+       INNER JOIN alumni_education ae ON u.user_id = ae.user_id
+       WHERE u.user_id = ? 
+         AND ae.school_id = ? 
+         AND u.role = 'alumni'
+         AND u.is_active = TRUE`,
+      [userId, schoolId]
+    );
+
+    if (!alumni.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'Alumni not found in your school or already deleted'
+      });
+    }
+
+    // Soft delete the alumni
+    await db.query(
+      'UPDATE users SET is_active = FALSE WHERE user_id = ?',
+      [userId]
+    );
+
+    // Log the activity
+    await db.query(
+      `INSERT INTO activity_logs (user_id, user_type, activity_type, activity_description)
+       VALUES (?, 'school_admin', 'delete_alumni', ?)`,
+      [schoolAdminId, `Deleted alumni ${alumni[0].first_name} ${alumni[0].last_name} (${alumni[0].email})`]
+    );
+
+    res.json({
+      success: true,
+      message: `Alumni ${alumni[0].first_name} ${alumni[0].last_name} has been deleted successfully`
+    });
+  } catch (error) {
+    console.error('Delete alumni error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete alumni',
       error: error.message
     });
   }
@@ -281,28 +390,43 @@ exports.changePassword = async (req, res) => {
       });
     }
 
+    // ✅ CHECK: New password cannot be the same as current password
+    if (current_password === new_password) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be different from your current password'
+      });
+    }
+
     let passwordHash;
     let updateTable;
     let updateId;
+    let userEmail;
+    let userName;
 
     if (req.user.role === 'school_admin') {
       const [admins] = await db.query(
-        'SELECT password_hash FROM school_admins WHERE admin_id = ?',
+        'SELECT password_hash, email, first_name, last_name FROM school_admins WHERE admin_id = ?',
         [req.user.user_id]
       );
       passwordHash = admins[0].password_hash;
+      userEmail = admins[0].email;
+      userName = `${admins[0].first_name} ${admins[0].last_name}`;
       updateTable = 'school_admins';
       updateId = 'admin_id';
     } else {
       const [users] = await db.query(
-        'SELECT password_hash FROM users WHERE user_id = ?',
+        'SELECT password_hash, email, first_name, last_name FROM users WHERE user_id = ?',
         [req.user.user_id]
       );
       passwordHash = users[0].password_hash;
+      userEmail = users[0].email;
+      userName = `${users[0].first_name} ${users[0].last_name}`;
       updateTable = 'users';
       updateId = 'user_id';
     }
 
+    // Verify current password
     const isValid = await bcrypt.compare(current_password, passwordHash);
 
     if (!isValid) {
@@ -312,6 +436,17 @@ exports.changePassword = async (req, res) => {
       });
     }
 
+    // ✅ ADDITIONAL CHECK: Verify new password is different from old (using hash comparison)
+    const isSamePassword = await bcrypt.compare(new_password, passwordHash);
+    
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be different from your current password'
+      });
+    }
+
+    // Hash and update new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(new_password, salt);
 
@@ -319,6 +454,15 @@ exports.changePassword = async (req, res) => {
       `UPDATE ${updateTable} SET password_hash = ? WHERE ${updateId} = ?`,
       [hashedPassword, req.user.user_id]
     );
+
+    // Send email notification
+    try {
+      await sendPasswordChangedEmail(userEmail, userName);
+      console.log('✓ Password changed confirmation email sent to:', userEmail);
+    } catch (emailError) {
+      console.error('✗ Password changed email failed:', emailError);
+      // Don't fail the request if email fails
+    }
 
     res.json({
       success: true,

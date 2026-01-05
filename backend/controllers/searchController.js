@@ -1,5 +1,9 @@
 const db = require('../config/database');
+const { getFileUrl } = require('../utils/profilePictureUtils');
 
+// @desc    Advanced alumni search - EXCLUDE CURRENT USER
+// @route   GET /api/search/alumni
+// @access  Private
 // @desc    Advanced alumni search - EXCLUDE CURRENT USER
 // @route   GET /api/search/alumni
 // @access  Private
@@ -19,7 +23,14 @@ exports.searchAlumni = async (req, res) => {
     } = req.query;
     
     const offset = (page - 1) * limit;
-    const currentUserId = req.user.user_id; // Get current logged-in user
+    const currentUserId = req.user.user_id;
+
+    // DEBUG: Log the request
+    console.log('Search request:', { 
+      user: req.user.user_id, 
+      role: req.user.role,
+      filters: { search, school_id, batch_year, city, country, company, profession, degree_level }
+    });
 
     // Base query - Get DISTINCT users (avoid duplicates for multiple schools)
     // EXCLUDE CURRENT USER
@@ -61,50 +72,61 @@ exports.searchAlumni = async (req, res) => {
       params.push(country.trim());
     }
 
-    // Education filters
+    // Education filters - FIXED: Better handling of optional filters
     if (school_id || batch_year || degree_level) {
       let eduSubquery = `u.user_id IN (
         SELECT DISTINCT ae.user_id 
         FROM alumni_education ae
         WHERE ae.is_verified = TRUE`;
       
+      const eduConditions = [];
+      
       if (school_id) {
-        eduSubquery += ` AND ae.school_id = ?`;
+        eduConditions.push(`ae.school_id = ?`);
         params.push(parseInt(school_id));
       }
       if (batch_year) {
-        eduSubquery += ` AND ae.end_year = ?`;
+        eduConditions.push(`ae.end_year = ?`);
         params.push(parseInt(batch_year));
       }
       if (degree_level) {
-        eduSubquery += ` AND ae.degree_level = ?`;
+        eduConditions.push(`ae.degree_level = ?`);
         params.push(degree_level);
+      }
+      
+      if (eduConditions.length > 0) {
+        eduSubquery += ` AND ` + eduConditions.join(' AND ');
       }
       eduSubquery += `)`;
       conditions.push(eduSubquery);
-    } else {
-      conditions.push(`u.user_id IN (SELECT DISTINCT user_id FROM alumni_education WHERE is_verified = TRUE)`);
     }
 
-    // Work filters
+    // Work filters - FIXED: Better handling of optional filters
     if (company || profession) {
       let workSubquery = `u.user_id IN (
         SELECT DISTINCT we.user_id 
         FROM work_experience we
         WHERE we.is_current = TRUE`;
       
-      if (company) {
-        workSubquery += ` AND we.company_name LIKE ?`;
-        params.push(`%${company}%`);
+      const workConditions = [];
+      
+      if (company && company.trim()) {
+        workConditions.push(`we.company_name LIKE ?`);
+        params.push(`%${company.trim()}%`);
       }
-      if (profession) {
-        workSubquery += ` AND (we.position LIKE ? OR we.industry LIKE ?)`;
-        params.push(`%${profession}%`, `%${profession}%`);
+      if (profession && profession.trim()) {
+        workConditions.push(`(we.position LIKE ? OR we.industry LIKE ?)`);
+        params.push(`%${profession.trim()}%`, `%${profession.trim()}%`);
+      }
+      
+      if (workConditions.length > 0) {
+        workSubquery += ` AND ` + workConditions.join(' AND ');
       }
       workSubquery += `)`;
       conditions.push(workSubquery);
     }
 
+    // Add conditions to query
     if (conditions.length > 0) {
       query += ` AND ` + conditions.join(' AND ');
     }
@@ -112,60 +134,76 @@ exports.searchAlumni = async (req, res) => {
     query += ` ORDER BY u.first_name ASC, u.last_name ASC LIMIT ? OFFSET ?`;
     params.push(parseInt(limit), parseInt(offset));
 
+    console.log('SQL Query:', query);
+    console.log('SQL Params:', params);
+
     const [users] = await db.query(query, params);
 
     // Get details for each user
     const alumni = await Promise.all(users.map(async (user) => {
-      let primaryEducationQuery = `
-        SELECT ae.*, s.school_name, s.city as school_city
-        FROM alumni_education ae
-        INNER JOIN schools s ON ae.school_id = s.school_id
-        WHERE ae.user_id = ? AND ae.is_verified = TRUE
-      `;
-      const eduParams = [user.user_id];
-      
-      if (school_id) {
-        primaryEducationQuery += ` ORDER BY (ae.school_id = ?) DESC, ae.end_year DESC LIMIT 1`;
-        eduParams.push(parseInt(school_id));
-      } else {
-        primaryEducationQuery += ` ORDER BY ae.end_year DESC LIMIT 1`;
+      try {
+        let primaryEducationQuery = `
+          SELECT ae.*, s.school_name, s.city as school_city
+          FROM alumni_education ae
+          INNER JOIN schools s ON ae.school_id = s.school_id
+          WHERE ae.user_id = ? AND ae.is_verified = TRUE
+        `;
+        const eduParams = [user.user_id];
+        
+        if (school_id) {
+          primaryEducationQuery += ` ORDER BY (ae.school_id = ?) DESC, ae.end_year DESC LIMIT 1`;
+          eduParams.push(parseInt(school_id));
+        } else {
+          primaryEducationQuery += ` ORDER BY ae.end_year DESC LIMIT 1`;
+        }
+        
+        const [primaryEducation] = await db.query(primaryEducationQuery, eduParams);
+
+        const [allSchools] = await db.query(
+          `SELECT s.school_name, ae.start_year, ae.end_year, ae.degree_level
+           FROM alumni_education ae
+           INNER JOIN schools s ON ae.school_id = s.school_id
+           WHERE ae.user_id = ? AND ae.is_verified = TRUE
+           ORDER BY ae.start_year`,
+          [user.user_id]
+        );
+
+        const [work] = await db.query(
+          `SELECT company_name, position, industry, location
+           FROM work_experience
+           WHERE user_id = ? AND is_current = TRUE
+           ORDER BY start_date DESC
+           LIMIT 1`,
+          [user.user_id]
+        );
+
+        return {
+          ...user,
+          profile_picture: user.profile_picture 
+            ? `${req.protocol}://${req.get('host')}/uploads/${user.profile_picture.replace(/^uploads\//, '')}`
+            : null,
+          school_name: primaryEducation[0]?.school_name || null,
+          school_city: primaryEducation[0]?.school_city || null,
+          start_year: primaryEducation[0]?.start_year || null,
+          end_year: primaryEducation[0]?.end_year || null,
+          degree_level: primaryEducation[0]?.degree_level || null,
+          field_of_study: primaryEducation[0]?.field_of_study || null,
+          all_schools: allSchools || [],
+          schools_count: allSchools?.length || 0,
+          company_name: work[0]?.company_name || null,
+          position: work[0]?.position || null,
+          industry: work[0]?.industry || null,
+          work_location: work[0]?.location || null
+        };
+      } catch (error) {
+        console.error(`Error fetching details for user ${user.user_id}:`, error);
+        return {
+          ...user,
+          profile_picture: null,
+          all_schools: [],
+          schools_count: 0
+        };
       }
-      
-      const [primaryEducation] = await db.query(primaryEducationQuery, eduParams);
-
-      const [allSchools] = await db.query(
-        `SELECT s.school_name, ae.start_year, ae.end_year, ae.degree_level
-         FROM alumni_education ae
-         INNER JOIN schools s ON ae.school_id = s.school_id
-         WHERE ae.user_id = ? AND ae.is_verified = TRUE
-         ORDER BY ae.start_year`,
-        [user.user_id]
-      );
-
-      const [work] = await db.query(
-        `SELECT company_name, position, industry, location
-         FROM work_experience
-         WHERE user_id = ? AND is_current = TRUE
-         ORDER BY start_date DESC
-         LIMIT 1`,
-        [user.user_id]
-      );
-
-      return {
-        ...user,
-        school_name: primaryEducation[0]?.school_name || null,
-        school_city: primaryEducation[0]?.school_city || null,
-        start_year: primaryEducation[0]?.start_year || null,
-        end_year: primaryEducation[0]?.end_year || null,
-        degree_level: primaryEducation[0]?.degree_level || null,
-        field_of_study: primaryEducation[0]?.field_of_study || null,
-        all_schools: allSchools,
-        schools_count: allSchools.length,
-        company_name: work[0]?.company_name || null,
-        position: work[0]?.position || null,
-        industry: work[0]?.industry || null,
-        work_location: work[0]?.location || null
-      };
     }));
 
     // Get total count (same filters, exclude current user)
@@ -180,6 +218,7 @@ exports.searchAlumni = async (req, res) => {
     const countParams = [currentUserId];
     const countConditions = [];
 
+    // Replicate the same conditions for count
     if (search && search.trim()) {
       countConditions.push(`(u.first_name LIKE ? OR u.last_name LIKE ? OR CONCAT(u.first_name, ' ', u.last_name) LIKE ?)`);
       const searchTerm = `%${search.trim()}%`;
@@ -198,33 +237,43 @@ exports.searchAlumni = async (req, res) => {
 
     if (school_id || batch_year || degree_level) {
       let eduSubquery = `u.user_id IN (SELECT DISTINCT ae.user_id FROM alumni_education ae WHERE ae.is_verified = TRUE`;
+      const eduConditions = [];
+      
       if (school_id) {
-        eduSubquery += ` AND ae.school_id = ?`;
+        eduConditions.push(`ae.school_id = ?`);
         countParams.push(parseInt(school_id));
       }
       if (batch_year) {
-        eduSubquery += ` AND ae.end_year = ?`;
+        eduConditions.push(`ae.end_year = ?`);
         countParams.push(parseInt(batch_year));
       }
       if (degree_level) {
-        eduSubquery += ` AND ae.degree_level = ?`;
+        eduConditions.push(`ae.degree_level = ?`);
         countParams.push(degree_level);
+      }
+      
+      if (eduConditions.length > 0) {
+        eduSubquery += ` AND ` + eduConditions.join(' AND ');
       }
       eduSubquery += `)`;
       countConditions.push(eduSubquery);
-    } else {
-      countConditions.push(`u.user_id IN (SELECT DISTINCT user_id FROM alumni_education WHERE is_verified = TRUE)`);
     }
 
     if (company || profession) {
       let workSubquery = `u.user_id IN (SELECT DISTINCT we.user_id FROM work_experience we WHERE we.is_current = TRUE`;
-      if (company) {
-        workSubquery += ` AND we.company_name LIKE ?`;
-        countParams.push(`%${company}%`);
+      const workConditions = [];
+      
+      if (company && company.trim()) {
+        workConditions.push(`we.company_name LIKE ?`);
+        countParams.push(`%${company.trim()}%`);
       }
-      if (profession) {
-        workSubquery += ` AND (we.position LIKE ? OR we.industry LIKE ?)`;
-        countParams.push(`%${profession}%`, `%${profession}%`);
+      if (profession && profession.trim()) {
+        workConditions.push(`(we.position LIKE ? OR we.industry LIKE ?)`);
+        countParams.push(`%${profession.trim()}%`, `%${profession.trim()}%`);
+      }
+      
+      if (workConditions.length > 0) {
+        workSubquery += ` AND ` + workConditions.join(' AND ');
       }
       workSubquery += `)`;
       countConditions.push(workSubquery);
@@ -234,8 +283,11 @@ exports.searchAlumni = async (req, res) => {
       countQuery += ` AND ` + countConditions.join(' AND ');
     }
 
+    console.log('Count Query:', countQuery);
+    console.log('Count Params:', countParams);
+
     const [countResult] = await db.query(countQuery, countParams);
-    const total = countResult[0].total || 0;
+    const total = countResult[0]?.total || 0;
 
     res.json({
       success: true,
@@ -244,7 +296,7 @@ exports.searchAlumni = async (req, res) => {
         total,
         page: parseInt(page),
         limit: parseInt(limit),
-        pages: Math.ceil(total / limit)
+        pages: Math.ceil(total / limit) || 1
       }
     });
   } catch (error) {
@@ -252,7 +304,8 @@ exports.searchAlumni = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to search alumni',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };

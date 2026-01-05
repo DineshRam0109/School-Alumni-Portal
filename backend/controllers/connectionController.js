@@ -1,13 +1,22 @@
 const db = require('../config/database');
 const { createNotification } = require('./notificationController');
+const { getAvatarUrl } = require('../utils/profilePictureUtils');
+const { 
+  sendConnectionRequestEmail, 
+  sendConnectionAcceptedEmail 
+} = require('../utils/emailService');
 
-// @desc    Send connection request
-// @route   POST /api/connections/send
-// @access  Private
 exports.sendRequest = async (req, res) => {
   try {
     const { receiver_id } = req.body;
     const sender_id = req.user.user_id;
+
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Administrators cannot send connection requests. This feature is for alumni networking only.'
+      });
+    }
 
     if (!receiver_id) {
       return res.status(400).json({
@@ -25,7 +34,7 @@ exports.sendRequest = async (req, res) => {
 
     // Check if receiver exists and is active
     const [receiver] = await db.query(
-      'SELECT user_id, first_name, last_name FROM users WHERE user_id = ? AND is_active = TRUE',
+      'SELECT user_id, first_name, last_name, email, role FROM users WHERE user_id = ? AND is_active = TRUE',
       [receiver_id]
     );
 
@@ -33,6 +42,13 @@ exports.sendRequest = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'User not found'
+      });
+    }
+
+    if (receiver[0].role === 'school_admin' || receiver[0].role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot send connection requests to administrators'
       });
     }
 
@@ -81,6 +97,20 @@ exports.sendRequest = async (req, res) => {
       console.error('Notification creation failed:', notifError);
     }
 
+    // ✅ SEND EMAIL
+    try {
+      await sendConnectionRequestEmail(
+        receiver[0].email,
+        `${receiver[0].first_name} ${receiver[0].last_name}`,
+        `${req.user.first_name} ${req.user.last_name}`,
+        sender_id
+      );
+      console.log('✓ Connection request email sent to:', receiver[0].email);
+    } catch (emailError) {
+      console.error('❌ Connection request email failed:', emailError);
+      // Don't fail the request if email fails
+    }
+
     res.status(201).json({
       success: true,
       message: 'Connection request sent successfully',
@@ -95,6 +125,7 @@ exports.sendRequest = async (req, res) => {
     });
   }
 };
+
 
 // @desc    Get connection status with a user
 // @route   GET /api/connections/status/:userId
@@ -118,6 +149,29 @@ exports.getConnectionStatus = async (req, res) => {
       });
     }
 
+    // Check if target user is admin
+    const [targetUser] = await db.query(
+      'SELECT role FROM users WHERE user_id = ?',
+      [userId]
+    );
+
+    if (targetUser.length > 0 && 
+        (targetUser[0].role === 'school_admin' || targetUser[0].role === 'super_admin')) {
+      return res.json({
+        success: true,
+        status: 'admin'
+      });
+    }
+
+    // If current user is admin
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.json({
+        success: true,
+        status: 'admin_user'
+      });
+    }
+
+    // Check for connection
     const [connections] = await db.query(
       `SELECT 
         connection_id,
@@ -130,10 +184,37 @@ exports.getConnectionStatus = async (req, res) => {
       [currentUserId, userId, userId, currentUserId]
     );
 
+    // Check for mentorship relationship
+    const [mentorship] = await db.query(
+      `SELECT 
+        mentorship_id,
+        mentor_id,
+        mentee_id,
+        status
+       FROM mentorship 
+       WHERE (mentor_id = ? AND mentee_id = ?) 
+          OR (mentor_id = ? AND mentee_id = ?)
+         AND status IN ('requested', 'active', 'completed')`,
+      [currentUserId, userId, userId, currentUserId]
+    );
+
+    // If has mentorship, return that info
+    if (mentorship.length > 0) {
+      return res.json({
+        success: true,
+        status: connections.length > 0 && connections[0].status === 'accepted' ? 'accepted' : 'none',
+        mentorship_relationship: true,
+        mentorship_status: mentorship[0].status,
+        is_mentor: mentorship[0].mentor_id === currentUserId
+      });
+    }
+
+    // Handle connection status
     if (!connections.length) {
       return res.json({
         success: true,
-        status: 'none'
+        status: 'none',
+        mentorship_relationship: false
       });
     }
 
@@ -143,7 +224,8 @@ exports.getConnectionStatus = async (req, res) => {
       return res.json({
         success: true,
         status: 'accepted',
-        connection_id: connection.connection_id
+        connection_id: connection.connection_id,
+        mentorship_relationship: false
       });
     }
 
@@ -152,20 +234,23 @@ exports.getConnectionStatus = async (req, res) => {
         return res.json({
           success: true,
           status: 'sent',
-          connection_id: connection.connection_id
+          connection_id: connection.connection_id,
+          mentorship_relationship: false
         });
       } else {
         return res.json({
           success: true,
           status: 'received',
-          connection_id: connection.connection_id
+          connection_id: connection.connection_id,
+          mentorship_relationship: false
         });
       }
     }
 
     return res.json({
       success: true,
-      status: 'none'
+      status: 'none',
+      mentorship_relationship: false
     });
   } catch (error) {
     console.error('Get connection status error:', error);
@@ -176,13 +261,19 @@ exports.getConnectionStatus = async (req, res) => {
     });
   }
 };
-
 // @desc    Accept connection request
 // @route   PUT /api/connections/:id/accept
-// @access  Private
+// @access  Private (Alumni only)
 exports.acceptRequest = async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Administrators cannot manage connection requests'
+      });
+    }
 
     if (!id || isNaN(parseInt(id))) {
       return res.status(400).json({
@@ -192,7 +283,7 @@ exports.acceptRequest = async (req, res) => {
     }
 
     const [connections] = await db.query(
-      `SELECT c.*, u.first_name, u.last_name 
+      `SELECT c.*, u.first_name, u.last_name, u.email, u.role 
        FROM connections c
        JOIN users u ON c.sender_id = u.user_id
        WHERE c.connection_id = ? AND u.is_active = TRUE`,
@@ -207,6 +298,13 @@ exports.acceptRequest = async (req, res) => {
     }
 
     const connection = connections[0];
+
+    if (connection.role === 'school_admin' || connection.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot accept connection from administrators'
+      });
+    }
 
     if (connection.receiver_id !== req.user.user_id) {
       return res.status(403).json({
@@ -234,6 +332,7 @@ exports.acceptRequest = async (req, res) => {
       ['accepted', id]
     );
 
+    // Create notification
     try {
       await createNotification(
         connection.sender_id,
@@ -245,6 +344,20 @@ exports.acceptRequest = async (req, res) => {
       );
     } catch (notifError) {
       console.error('Notification creation failed:', notifError);
+    }
+
+    // ✅ SEND EMAIL
+    try {
+      await sendConnectionAcceptedEmail(
+        connection.email,
+        `${connection.first_name} ${connection.last_name}`,
+        `${req.user.first_name} ${req.user.last_name}`,
+        req.user.user_id
+      );
+      console.log('✓ Connection accepted email sent to:', connection.email);
+    } catch (emailError) {
+      console.error('❌ Connection accepted email failed:', emailError);
+      // Don't fail the request if email fails
     }
 
     res.json({
@@ -261,12 +374,21 @@ exports.acceptRequest = async (req, res) => {
   }
 };
 
+
 // @desc    Reject connection request
 // @route   PUT /api/connections/:id/reject
-// @access  Private
+// @access  Private (Alumni only)
 exports.rejectRequest = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // FIXED: Prevent admins from rejecting connection requests
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Administrators cannot manage connection requests'
+      });
+    }
 
     if (!id || isNaN(parseInt(id))) {
       return res.status(400).json({
@@ -313,11 +435,20 @@ exports.rejectRequest = async (req, res) => {
   }
 };
 
-// @desc    Get my connections with search and pagination
-// @route   GET /api/connections
-// @access  Private
 exports.getMyConnections = async (req, res) => {
   try {
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.json({
+        success: true,
+        connections: [],
+        pagination: {
+          total: 0,
+          limit: parseInt(req.query.limit || 50),
+          offset: parseInt(req.query.offset || 0)
+        }
+      });
+    }
+
     const { search, limit = 50, offset = 0 } = req.query;
     const userId = req.user.user_id;
 
@@ -374,6 +505,8 @@ exports.getMyConnections = async (req, res) => {
         AND c.status = 'accepted'
         AND u1.is_active = TRUE 
         AND u2.is_active = TRUE
+        AND u1.role = 'alumni'
+        AND u2.role = 'alumni'
     `;
 
     let countQuery = `
@@ -385,6 +518,8 @@ exports.getMyConnections = async (req, res) => {
         AND c.status = 'accepted'
         AND u1.is_active = TRUE 
         AND u2.is_active = TRUE
+        AND u1.role = 'alumni'
+        AND u2.role = 'alumni'
     `;
 
     const queryParams = [
@@ -421,9 +556,16 @@ exports.getMyConnections = async (req, res) => {
     const [connections] = await db.query(query, queryParams);
     const [totalResult] = await db.query(countQuery, countParams);
 
+   
+
+const formattedConnections = connections.map(conn => ({
+      ...conn,
+      profile_picture: conn.profile_picture ? getAvatarUrl(conn.profile_picture) : null
+    }));
+
     res.json({
       success: true,
-      connections,
+      connections: formattedConnections,
       pagination: {
         total: totalResult[0].total,
         limit: parseInt(limit),
@@ -442,9 +584,22 @@ exports.getMyConnections = async (req, res) => {
 
 // @desc    Get pending connection requests
 // @route   GET /api/connections/pending
-// @access  Private
+// @access  Private (Alumni only - admins return empty)
 exports.getPendingRequests = async (req, res) => {
   try {
+    // FIXED: Admins don't receive connection requests
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.json({
+        success: true,
+        requests: [],
+        pagination: {
+          total: 0,
+          limit: parseInt(req.query.limit || 20),
+          offset: parseInt(req.query.offset || 0)
+        }
+      });
+    }
+
     const { limit = 20, offset = 0 } = req.query;
     const userId = req.user.user_id;
 
@@ -464,7 +619,7 @@ exports.getPendingRequests = async (req, res) => {
         s.school_name,
         ae.end_year as graduation_year
        FROM connections c
-       JOIN users u ON c.sender_id = u.user_id AND u.is_active = TRUE
+       JOIN users u ON c.sender_id = u.user_id AND u.is_active = TRUE AND u.role = 'alumni'
        LEFT JOIN work_experience we ON u.user_id = we.user_id AND we.is_current = TRUE
        LEFT JOIN alumni_education ae ON u.user_id = ae.user_id AND ae.is_verified = TRUE
        LEFT JOIN schools s ON ae.school_id = s.school_id
@@ -478,7 +633,7 @@ exports.getPendingRequests = async (req, res) => {
       `SELECT COUNT(*) as total 
        FROM connections c
        JOIN users u ON c.sender_id = u.user_id
-       WHERE c.receiver_id = ? AND c.status = 'pending' AND u.is_active = TRUE`,
+       WHERE c.receiver_id = ? AND c.status = 'pending' AND u.is_active = TRUE AND u.role = 'alumni'`,
       [userId]
     );
 
@@ -503,11 +658,19 @@ exports.getPendingRequests = async (req, res) => {
 
 // @desc    Remove connection
 // @route   DELETE /api/connections/:id
-// @access  Private
+// @access  Private (Alumni only)
 exports.removeConnection = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.user_id;
+
+    // FIXED: Prevent admins from removing connections
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Administrators cannot manage connections'
+      });
+    }
 
     if (!id || isNaN(parseInt(id))) {
       return res.status(400).json({
@@ -555,9 +718,20 @@ exports.removeConnection = async (req, res) => {
 
 // @desc    Get connections with school and batch information
 // @route   GET /api/connections/with-details
-// @access  Private
+// @access  Private (Alumni only)
+// @desc    Get connections with school and batch information
+// @route   GET /api/connections/with-details
+// @access  Private (Alumni only)
 exports.getConnectionsWithDetails = async (req, res) => {
   try {
+    // FIXED: Admins return empty connections
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.json({
+        success: true,
+        connections: []
+      });
+    }
+
     const userId = req.user.user_id;
 
     const [connections] = await db.query(
@@ -570,7 +744,8 @@ exports.getConnectionsWithDetails = async (req, res) => {
         u.current_country,
         ae.school_id,
         s.school_name,
-        ae.end_year as graduation_year
+        ae.end_year as graduation_year,
+        ae.end_year as batch_year
        FROM connections c
        INNER JOIN users u ON (
          CASE 
@@ -583,6 +758,7 @@ exports.getConnectionsWithDetails = async (req, res) => {
        WHERE c.status = 'accepted'
          AND (c.sender_id = ? OR c.receiver_id = ?)
          AND u.is_active = TRUE
+         AND u.role = 'alumni'
        ORDER BY u.first_name, u.last_name`,
       [userId, userId, userId]
     );
@@ -603,11 +779,19 @@ exports.getConnectionsWithDetails = async (req, res) => {
 
 // @desc    Cancel pending connection request
 // @route   DELETE /api/connections/request/:id/cancel
-// @access  Private
+// @access  Private (Alumni only)
 exports.cancelRequest = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.user_id;
+
+    // FIXED: Prevent admins from canceling requests
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Administrators cannot manage connection requests'
+      });
+    }
 
     if (!id || isNaN(parseInt(id))) {
       return res.status(400).json({
@@ -651,93 +835,25 @@ exports.cancelRequest = async (req, res) => {
   }
 };
 
-// ADD THE MISSING FUNCTIONS THAT ARE REFERENCED IN ROUTES
-// @desc    Get all connections (simple version)
-// @route   GET /api/connections
-// @access  Private
-exports.getConnections = async (req, res) => {
-  try {
-    const [connections] = await db.query(
-      `SELECT 
-        c.connection_id,
-        c.created_at,
-        u.user_id as connection_user_id,
-        u.first_name,
-        u.last_name,
-        u.email,
-        u.profile_picture,
-        u.current_city,
-        u.current_country,
-        u.bio
-       FROM connections c
-       JOIN users u ON (
-         CASE 
-           WHEN c.sender_id = ? THEN c.receiver_id 
-           ELSE c.sender_id 
-         END = u.user_id
-       )
-       WHERE c.status = 'accepted'
-         AND (c.sender_id = ? OR c.receiver_id = ?)
-       ORDER BY u.first_name ASC`,
-      [req.user.user_id, req.user.user_id, req.user.user_id]
-    );
 
-    res.json({
-      success: true,
-      connections
-    });
-  } catch (error) {
-    console.error('Get connections error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch connections'
-    });
-  }
-};
 
-// @desc    Get connection requests (simple version)
-// @route   GET /api/connections/requests
-// @access  Private
-exports.getRequests = async (req, res) => {
-  try {
-    const [requests] = await db.query(
-      `SELECT 
-        c.connection_id,
-        c.sender_id,
-        c.created_at,
-        u.first_name,
-        u.last_name,
-        u.email,
-        u.profile_picture,
-        u.current_city,
-        u.current_country
-       FROM connections c
-       JOIN users u ON c.sender_id = u.user_id
-       WHERE c.receiver_id = ? AND c.status = 'pending'
-       ORDER BY c.created_at DESC`,
-      [req.user.user_id]
-    );
 
-    res.json({
-      success: true,
-      requests
-    });
-  } catch (error) {
-    console.error('Get requests error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch connection requests'
-    });
-  }
-};
 
 // @desc    Respond to connection request (combined accept/reject)
 // @route   PUT /api/connections/:id/respond
-// @access  Private
+// @access  Private (Alumni only)
 exports.respondToRequest = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
+
+    // FIXED: Prevent admins from responding to requests
+    if (req.user.role === 'school_admin' || req.user.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Administrators cannot manage connection requests'
+      });
+    }
 
     if (!['accepted', 'rejected'].includes(status)) {
       return res.status(400).json({

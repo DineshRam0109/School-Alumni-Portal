@@ -2,17 +2,15 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Create all required upload directories
+// Create required upload directories
 const createUploadDirs = () => {
   const dirs = [
     'uploads',
     'uploads/profiles',
     'uploads/messages',
-    'uploads/groups',
     'uploads/group-messages',
     'uploads/documents',
-    'uploads/events',
-    'uploads/resumes'
+    'uploads/schools'
   ];
   
   dirs.forEach(dir => {
@@ -45,16 +43,6 @@ const messageStorage = multer.diskStorage({
   }
 });
 
-const groupAvatarStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/groups/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `group-${uniqueSuffix}${path.extname(file.originalname)}`);
-  }
-});
-
 const groupMessageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, 'uploads/group-messages/');
@@ -65,24 +53,24 @@ const groupMessageStorage = multer.diskStorage({
   }
 });
 
-const eventStorage = multer.diskStorage({
+// ✅ ADD THIS - Group avatar storage (reuses profiles folder)
+const groupAvatarStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/events/');
+    cb(null, 'uploads/profiles/');
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `event-${uniqueSuffix}${path.extname(file.originalname)}`);
+    cb(null, `group-${uniqueSuffix}${path.extname(file.originalname)}`);
   }
 });
 
-const resumeStorage = multer.diskStorage({
+const schoolLogoStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/resumes/');
+    cb(null, 'uploads/schools/');
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const userId = req.user ? req.user.user_id : 'unknown';
-    cb(null, `resume-${userId}-${uniqueSuffix}${path.extname(file.originalname)}`);
+    cb(null, `school-logo-${uniqueSuffix}${path.extname(file.originalname)}`);
   }
 });
 
@@ -93,23 +81,6 @@ const imageFileFilter = (req, file, cb) => {
     cb(null, true);
   } else {
     cb(new Error('Only image files are allowed (jpeg, png, gif, webp)'), false);
-  }
-};
-
-const resumeFileFilter = (req, file, cb) => {
-  const allowedMimes = [
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  ];
-  
-  const allowedExtensions = ['.pdf', '.doc', '.docx'];
-  const fileExtension = path.extname(file.originalname).toLowerCase();
-  
-  if (allowedMimes.includes(file.mimetype) && allowedExtensions.includes(fileExtension)) {
-    cb(null, true);
-  } else {
-    cb(new Error('Only PDF, DOC, and DOCX files are allowed for resumes'), false);
   }
 };
 
@@ -132,7 +103,6 @@ const attachmentFileFilter = (req, file, cb) => {
     'video/mp4', 'video/mpeg', 'video/webm', 'video/avi', 'video/quicktime'
   ];
   
-  // Additional extension check for safety
   const allowedExtensions = [
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg',
     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt',
@@ -149,29 +119,11 @@ const attachmentFileFilter = (req, file, cb) => {
   }
 };
 
-// Create multer instances with consistent configuration
+// Create multer instances
 const uploadProfilePicture = multer({
   storage: profileStorage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: imageFileFilter
-});
-
-const uploadGroupAvatar = multer({
-  storage: groupAvatarStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: imageFileFilter
-});
-
-const uploadEventImage = multer({
-  storage: eventStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: imageFileFilter
-});
-
-const uploadResume = multer({
-  storage: resumeStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  fileFilter: resumeFileFilter
 });
 
 const uploadMessageAttachments = multer({
@@ -190,6 +142,19 @@ const uploadGroupMessageAttachments = multer({
     files: 5 // Maximum 5 files
   },
   fileFilter: attachmentFileFilter
+});
+
+// ✅ ADD THIS - Group avatar upload
+const uploadGroupAvatar = multer({
+  storage: groupAvatarStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: imageFileFilter
+});
+
+const uploadSchoolLogo = multer({
+  storage: schoolLogoStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: imageFileFilter
 });
 
 // Enhanced error handling middleware
@@ -251,10 +216,9 @@ module.exports = {
   // Multer upload instances
   uploadProfilePicture,
   uploadMessageAttachments,
-  uploadGroupAvatar,
   uploadGroupMessageAttachments,
-  uploadEventImage,
-  uploadResume,
+  uploadGroupAvatar,           // ✅ ADD THIS
+  uploadSchoolLogo,
   
   // Middleware
   handleMulterError,

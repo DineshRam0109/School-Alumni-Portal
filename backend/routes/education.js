@@ -38,6 +38,30 @@ router.get('/my', protect, async (req, res) => {
   }
 });
 
+// Update education
+router.put('/:id', protect, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { school_id, degree_level, field_of_study, start_year, end_year } = req.body;
+    
+    await db.query(
+      `UPDATE alumni_education SET
+        school_id = COALESCE(?, school_id),
+        degree_level = COALESCE(?, degree_level),
+        field_of_study = COALESCE(?, field_of_study),
+        start_year = COALESCE(?, start_year),
+        end_year = COALESCE(?, end_year)
+       WHERE education_id = ? AND user_id = ?`,
+      [school_id, degree_level, field_of_study, start_year, end_year, id, req.user.user_id]
+    );
+    
+    res.json({ success: true, message: 'Education updated successfully' });
+  } catch (error) {
+    console.error('Update education error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update education' });
+  }
+});
+
 // Delete education
 router.delete('/:id', protect, async (req, res) => {
   try {

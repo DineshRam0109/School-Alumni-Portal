@@ -1,5 +1,16 @@
 const db = require('../config/database');
 const { createNotification } = require('./notificationController');
+const { getCompleteFileUrl } = require('../utils/profilePictureUtils');
+
+// Helper function to determine file type
+function getFileType(mimeType) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
+
 
 // @desc    Send message with optional attachments
 // @route   POST /api/messages/send
@@ -29,7 +40,7 @@ exports.sendMessage = async (req, res) => {
       });
     }
 
-    // Check if users are connected
+    // Check connection
     const [connection] = await db.query(
       `SELECT * FROM connections 
        WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
@@ -37,10 +48,19 @@ exports.sendMessage = async (req, res) => {
       [req.user.user_id, receiver_id, receiver_id, req.user.user_id]
     );
 
-    if (!connection.length) {
+    // Check mentorship relationship
+    const [mentorship] = await db.query(
+      `SELECT * FROM mentorship 
+       WHERE ((mentor_id = ? AND mentee_id = ?) OR (mentor_id = ? AND mentee_id = ?))
+         AND status IN ('requested', 'active', 'completed')`,
+      [req.user.user_id, receiver_id, receiver_id, req.user.user_id]
+    );
+
+    // Allow message if either connected OR have mentorship relationship
+    if (!connection.length && !mentorship.length) {
       return res.status(403).json({
         success: false,
-        message: 'You can only message your connections'
+        message: 'You can only message your connections or mentorship partners'
       });
     }
 
@@ -53,17 +73,28 @@ exports.sendMessage = async (req, res) => {
     const messageId = result.insertId;
 
     // Handle file attachments
+    const attachmentData = [];
     if (files && files.length > 0) {
-      const attachmentPromises = files.map(file => {
+      for (const file of files) {
         const fileType = getFileType(file.mimetype);
-        return db.query(
+        const filePath = file.path.replace(/\\/g, '/');
+        
+        await db.query(
           `INSERT INTO message_attachments 
            (message_id, file_name, file_path, file_type, file_size, mime_type) 
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [messageId, file.originalname, file.path, fileType, file.size, file.mimetype]
+          [messageId, file.originalname, filePath, fileType, file.size, file.mimetype]
         );
-      });
-      await Promise.all(attachmentPromises);
+
+        attachmentData.push({
+          file_name: file.originalname,
+          file_path: filePath,
+          file_url: getCompleteFileUrl(req, att.file_path),
+          file_type: fileType,
+          file_size: file.size,
+          mime_type: file.mimetype
+        });
+      }
     }
 
     // Create notification
@@ -75,7 +106,7 @@ exports.sendMessage = async (req, res) => {
       req.user.user_id
     );
 
-    // Get the created message with attachments
+    // Get the created message with sender details
     const [message] = await db.query(
       `SELECT m.*, 
               u.first_name as sender_first_name, 
@@ -87,18 +118,12 @@ exports.sendMessage = async (req, res) => {
       [messageId]
     );
 
-    // Get attachments
-    const [attachments] = await db.query(
-      'SELECT * FROM message_attachments WHERE message_id = ?',
-      [messageId]
-    );
-
     res.status(201).json({
       success: true,
       message: 'Message sent successfully',
       data: {
         ...message[0],
-        attachments
+        attachments: attachmentData
       }
     });
   } catch (error) {
@@ -117,10 +142,24 @@ exports.sendMessage = async (req, res) => {
 exports.getConversation = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { page = 1, limit = 50 } = req.query;
-    const offset = (page - 1) * limit;
+    const { limit = 100 } = req.query;
 
-    // Check if users are connected
+    console.log('[getConversation] User ID:', userId, 'Current User:', req.user.user_id);
+
+    // Check if user exists
+    const [userCheck] = await db.query(
+      'SELECT user_id FROM users WHERE user_id = ? AND is_active = TRUE',
+      [userId]
+    );
+
+    if (!userCheck.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check connection
     const [connection] = await db.query(
       `SELECT * FROM connections 
        WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
@@ -128,79 +167,102 @@ exports.getConversation = async (req, res) => {
       [req.user.user_id, userId, userId, req.user.user_id]
     );
 
-    if (!connection.length) {
+    console.log('[getConversation] Connection found:', connection.length > 0);
+
+    // Try to check mentorship (optional)
+    let hasMentorship = false;
+    try {
+      const [mentorship] = await db.query(
+        `SELECT * FROM mentorship 
+         WHERE ((mentor_id = ? AND mentee_id = ?) OR (mentor_id = ? AND mentee_id = ?))
+           AND status IN ('requested', 'active', 'completed')`,
+        [req.user.user_id, userId, userId, req.user.user_id]
+      );
+      hasMentorship = mentorship.length > 0;
+      console.log('[getConversation] Mentorship found:', hasMentorship);
+    } catch (error) {
+      console.log('[getConversation] Mentorship table not available, skipping check');
+    }
+
+    // Allow if connected OR have mentorship
+    if (!connection.length && !hasMentorship) {
       return res.status(403).json({
         success: false,
-        message: 'You can only view conversations with your connections'
+        message: 'You can only view messages with your connections or mentorship partners'
       });
     }
 
-    // Get messages (exclude deleted messages)
+    // FIXED: Corrected the SQL query with proper parameter mapping
     const [messages] = await db.query(
       `SELECT m.*, 
-              sender.first_name as sender_first_name, 
-              sender.last_name as sender_last_name,
-              sender.profile_picture as sender_profile_picture
+              u.first_name as sender_first_name, 
+              u.last_name as sender_last_name,
+              u.profile_picture as sender_profile_picture
        FROM messages m
-       JOIN users sender ON m.sender_id = sender.user_id
+       JOIN users u ON m.sender_id = u.user_id
        WHERE ((m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?))
          AND NOT (
            (m.sender_id = ? AND m.deleted_for_sender = TRUE) OR
            (m.receiver_id = ? AND m.deleted_for_receiver = TRUE)
          )
-       ORDER BY m.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [req.user.user_id, userId, userId, req.user.user_id, 
-       req.user.user_id, req.user.user_id,
-       parseInt(limit), offset]
+       ORDER BY m.created_at ASC
+       LIMIT ?`,
+      [
+        req.user.user_id, userId,  // Condition 1: current user as sender
+        userId, req.user.user_id,  // Condition 2: current user as receiver
+        req.user.user_id,          // NOT condition 1: deleted for sender (current user)
+        req.user.user_id,          // NOT condition 2: deleted for receiver (current user)
+        parseInt(limit)            // LIMIT
+      ]
     );
 
-    // Get attachments for all messages
-    if (messages.length > 0) {
-      const messageIds = messages.map(m => m.message_id);
-      const [attachments] = await db.query(
-        `SELECT * FROM message_attachments WHERE message_id IN (?)`,
-        [messageIds]
+    console.log('[getConversation] Messages found:', messages.length);
+
+    // Get attachments for messages
+    const messageIds = messages.map(m => m.message_id);
+    let attachments = [];
+    
+    if (messageIds.length > 0) {
+      // Fix for single message ID case
+      const placeholders = messageIds.map(() => '?').join(',');
+      const [attachmentResults] = await db.query(
+        `SELECT * FROM message_attachments WHERE message_id IN (${placeholders})`,
+        messageIds
       );
-
-      // Group attachments by message_id
-      const attachmentsByMessage = {};
-      attachments.forEach(att => {
-        if (!attachmentsByMessage[att.message_id]) {
-          attachmentsByMessage[att.message_id] = [];
-        }
-        attachmentsByMessage[att.message_id].push(att);
-      });
-
-      // Add attachments to messages
-      messages.forEach(msg => {
-        msg.attachments = attachmentsByMessage[msg.message_id] || [];
-      });
+      attachments = attachmentResults;
     }
+
+    // Attach attachments to messages
+    const messagesWithAttachments = messages.map(msg => ({
+      ...msg,
+      attachments: attachments.filter(att => att.message_id === msg.message_id).map(att => ({
+        ...att,
+        file_url: getCompleteFileUrl(req, att.file_path)
+      }))
+    }));
 
     // Mark messages as read
     await db.query(
-      'UPDATE messages SET is_read = TRUE WHERE sender_id = ? AND receiver_id = ? AND is_read = FALSE',
+      `UPDATE messages 
+       SET is_read = TRUE 
+       WHERE sender_id = ? AND receiver_id = ? AND is_read = FALSE`,
       [userId, req.user.user_id]
     );
 
     res.json({
       success: true,
-      messages: messages.reverse(),
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit)
-      }
+      messages: messagesWithAttachments
     });
   } catch (error) {
-    console.error('Get conversation error:', error);
+    console.error('[getConversation] Error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch messages',
+      message: 'Failed to fetch conversation',
       error: error.message
     });
   }
 };
+
 
 // @desc    Delete message (for self or both)
 // @route   DELETE /api/messages/:id
@@ -233,7 +295,10 @@ exports.deleteMessage = async (req, res) => {
       });
     }
 
-    if (delete_for === 'both') {
+    // FIX: Support both 'both' and 'everyone' parameters
+    const deleteForEveryone = delete_for === 'both' || delete_for === 'everyone';
+    
+    if (deleteForEveryone) {
       if (!isSender) {
         return res.status(403).json({
           success: false,
@@ -251,6 +316,7 @@ exports.deleteMessage = async (req, res) => {
         });
       }
 
+      await db.query('DELETE FROM message_attachments WHERE message_id = ?', [id]);
       await db.query('DELETE FROM messages WHERE message_id = ?', [id]);
     } else {
       if (isSender) {
@@ -268,7 +334,7 @@ exports.deleteMessage = async (req, res) => {
 
     res.json({
       success: true,
-      message: delete_for === 'both' ? 'Message deleted for everyone' : 'Message deleted for you'
+      message: deleteForEveryone ? 'Message deleted for everyone' : 'Message deleted for you'
     });
   } catch (error) {
     console.error('Delete message error:', error);
@@ -280,12 +346,11 @@ exports.deleteMessage = async (req, res) => {
   }
 };
 
-// @desc    Get all conversations - FIXED VERSION
+// @desc    Get all conversations
 // @route   GET /api/messages/conversations
 // @access  Private
 exports.getConversations = async (req, res) => {
   try {
-    // Step 1: Get all users the current user has conversations with
     const [conversations] = await db.query(
       `SELECT DISTINCT 
         CASE 
@@ -309,7 +374,6 @@ exports.getConversations = async (req, res) => {
       });
     }
 
-    // Step 2: Get user details and conversation info for each user
     const userIds = conversations.map(c => c.user_id);
     
     const [conversationDetails] = await db.query(
@@ -396,10 +460,4 @@ exports.getUnreadCount = async (req, res) => {
   }
 };
 
-// Helper function to determine file type
-function getFileType(mimeType) {
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('video/')) return 'video';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  return 'document';
-}
+module.exports = exports;

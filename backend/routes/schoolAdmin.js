@@ -2,10 +2,20 @@ const express = require('express');
 const router = express.Router();
 const schoolAdminController = require('../controllers/schoolAdminController');
 const { protect, authorize } = require('../middleware/auth');
+const { uploadProfilePicture, handleMulterError } = require('../middleware/upload');
 
-// Public profile view - MUST come BEFORE router.use(protect)
-// This allows any authenticated user to view school admin profiles
+// Public profile view - allows any authenticated user to view school admin profiles
 router.get('/profile/:id', protect, schoolAdminController.getSchoolAdminById);
+
+// Profile picture upload - school admins only (MOVED BEFORE router.use)
+router.put(
+  '/profile-picture', 
+  protect, 
+  authorize('school_admin'),
+  uploadProfilePicture.single('profile_picture'),
+  handleMulterError,
+  schoolAdminController.updateAdminProfilePicture
+);
 
 // PROTECTED ROUTES - Require school_admin or super_admin role
 router.use(protect);

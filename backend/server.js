@@ -2,35 +2,62 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 
-// Security middleware
-app.use(helmet());
-
-// CORS middleware
+// 1. CORS FIRST - before any other middleware
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Body parsing middleware
+// 2. Body parsing middleware - BEFORE routes
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Rate limiting
+// 3. Security middleware
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: false
+}));
+
+// 4. Global rate limiting - LESS STRICT
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
+  max: 1000, // Very high limit for testing
   message: 'Too many requests from this IP, please try again later'
 });
 app.use('/api/', limiter);
 
-// Static files
-app.use('/uploads', express.static('uploads'));
+// 5. Static file serving
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res, filePath) => {
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    };
+    
+    if (mimeTypes[ext]) {
+      res.setHeader('Content-Type', mimeTypes[ext]);
+    }
+    
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+}));
 
-// Import and use routes
+// 6. Import routes
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const schoolRoutes = require('./routes/schools');
@@ -47,13 +74,10 @@ const notificationRoutes = require('./routes/notifications');
 const achievementRoutes = require('./routes/achievements');
 const companyRoutes = require('./routes/companies');
 const groupRoutes = require('./routes/groups');
-const schoolAdminRoutes = require('./routes/schoolAdmin'); // IMPORTANT
+const schoolAdminRoutes = require('./routes/schoolAdmin');
 const superAdminRoutes = require('./routes/superAdmin');
-const { initEventReminderCron } = require('./utils/eventReminderCron');
 
-
-
-// Register routes
+// 7. Register routes - AUTH FIRST
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/schools', schoolRoutes);
@@ -69,11 +93,11 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/achievements', achievementRoutes);
 app.use('/api/companies', companyRoutes);
-app.use('/api/school-admin', schoolAdminRoutes); // IMPORTANT - Make sure this line exists
+app.use('/api/school-admin', schoolAdminRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/groups', groupRoutes);
 
-// Health check
+// 8. Health check
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
@@ -82,7 +106,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Error handling middleware
+// 9. Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err.message);
   console.error('Stack:', err.stack);
@@ -94,21 +118,13 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
+// 10. 404 handler - MUST be LAST
 app.use('*', (req, res) => {
+  console.log(`❌ 404: ${req.method} ${req.originalUrl}`);
   res.status(404).json({
     success: false,
     message: `Route ${req.originalUrl} not found`
   });
 });
 
-if (process.env.NODE_ENV !== 'test') {
-  initEventReminderCron();
-}
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-});
+module.exports = app;

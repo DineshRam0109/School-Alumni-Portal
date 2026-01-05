@@ -6,26 +6,29 @@ const bcrypt = require('bcryptjs');
 // @access  Private/SuperAdmin
 exports.getDashboardStats = async (req, res) => {
   try {
-    // Get all statistics in parallel - FIXED: Exclude super_admin from alumni count
+    // Get all statistics in parallel
     const [
       totalAlumni,
       totalSchools,
       totalSchoolAdmins,
       totalEvents,
       totalJobs,
+      totalCompanies,
       totalConnections,
       recentAlumni,
       recentSchoolAdmins,
       topSchools
     ] = await Promise.all([
-      // FIXED: Only count actual alumni, not super_admin
       db.query('SELECT COUNT(*) as count FROM users WHERE role = "alumni" AND is_active = TRUE'),
       db.query('SELECT COUNT(*) as count FROM schools WHERE is_active = TRUE'),
       db.query('SELECT COUNT(*) as count FROM school_admins WHERE is_active = TRUE'),
       db.query('SELECT COUNT(*) as count FROM events WHERE is_active = TRUE'),
       db.query('SELECT COUNT(*) as count FROM jobs WHERE is_active = TRUE'),
+      db.query(`SELECT COUNT(DISTINCT company_name) as total 
+                FROM work_experience 
+                WHERE company_name IS NOT NULL 
+                AND company_name != ''`),
       db.query('SELECT COUNT(*) as count FROM connections WHERE status = "accepted"'),
-      // FIXED: Only show recent alumni, not super_admin
       db.query(`
         SELECT u.user_id, u.first_name, u.last_name, u.email, u.profile_picture, 
                u.current_city, u.created_at
@@ -34,8 +37,9 @@ exports.getDashboardStats = async (req, res) => {
         ORDER BY u.created_at DESC
         LIMIT 10
       `),
+      // UPDATED: Include profile_picture for school admins
       db.query(`
-        SELECT sa.admin_id, sa.first_name, sa.last_name, sa.email, 
+        SELECT sa.admin_id, sa.first_name, sa.last_name, sa.email, sa.profile_picture,
                s.school_name, sa.created_at
         FROM school_admins sa
         JOIN schools s ON sa.school_id = s.school_id
@@ -43,8 +47,9 @@ exports.getDashboardStats = async (req, res) => {
         ORDER BY sa.created_at DESC
         LIMIT 10
       `),
+      // UPDATED: Include logo for top schools
       db.query(`
-        SELECT s.school_id, s.school_name, s.city, s.state,
+        SELECT s.school_id, s.school_name, s.city, s.state, s.logo,
                COUNT(DISTINCT ae.user_id) as alumni_count
         FROM schools s
         LEFT JOIN alumni_education ae ON s.school_id = ae.school_id
@@ -64,6 +69,7 @@ exports.getDashboardStats = async (req, res) => {
         total_school_admins: totalSchoolAdmins[0][0].count,
         total_events: totalEvents[0][0].count,
         total_jobs: totalJobs[0][0].count,
+        total_companies: totalCompanies[0][0].total,
         total_connections: totalConnections[0][0].count,
         recent_alumni: recentAlumni[0],
         recent_school_admins: recentSchoolAdmins[0],
@@ -90,7 +96,7 @@ exports.getAllSchoolAdmins = async (req, res) => {
 
     let query = `
       SELECT sa.admin_id, sa.email, sa.first_name, sa.last_name, sa.phone,
-             sa.school_id, s.school_name, s.city, s.state,
+             sa.school_id, sa.profile_picture,s.school_name, s.city, s.state,
              sa.is_active, sa.created_at
       FROM school_admins sa
       JOIN schools s ON sa.school_id = s.school_id
@@ -206,6 +212,21 @@ exports.createSchoolAdmin = async (req, res) => {
       [req.user.user_id, `Created school admin ${email} for ${school[0].school_name}`]
     );
 
+    // ✅ SEND EMAIL NOTIFICATION TO NEW SCHOOL ADMIN
+    try {
+      const loginUrl = `${process.env.FRONTEND_URL}/school-admin-login`;
+      await sendSchoolAdminAssignmentEmail(
+        email,
+        `${first_name} ${last_name}`,
+        school[0].school_name,
+        loginUrl
+      );
+      console.log('✓ School admin assignment email sent to:', email);
+    } catch (emailError) {
+      console.error('✖ Failed to send school admin assignment email:', emailError);
+      // Don't fail the request if email fails
+    }
+
     res.status(201).json({
       success: true,
       message: `School admin created successfully for ${school[0].school_name}`,
@@ -220,6 +241,7 @@ exports.createSchoolAdmin = async (req, res) => {
     });
   }
 };
+
 
 // @desc    Update School Admin
 // @route   PUT /api/super-admin/school-admins/:adminId
@@ -703,6 +725,119 @@ exports.getAllAlumni = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch alumni',
+      error: error.message
+    });
+  }
+};
+
+exports.getSchoolAlumni = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const { page = 1, limit = 20, search, batch_year, verified } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Check if school exists
+    const [school] = await db.query(
+      'SELECT school_id, school_name FROM schools WHERE school_id = ?',
+      [schoolId]
+    );
+
+    if (!school.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'School not found'
+      });
+    }
+
+    let query = `
+      SELECT u.user_id, u.first_name, u.last_name, u.email, u.profile_picture,
+             u.current_city, u.current_country, u.phone, u.is_active,
+             ae.start_year, ae.end_year, ae.degree_level, ae.field_of_study, ae.is_verified,
+             we.company_name, we.position
+      FROM alumni_education ae
+      JOIN users u ON ae.user_id = u.user_id
+      LEFT JOIN (
+        SELECT user_id, company_name, position
+        FROM work_experience
+        WHERE is_current = TRUE
+        LIMIT 1
+      ) we ON u.user_id = we.user_id
+      WHERE ae.school_id = ?
+    `;
+    const params = [schoolId];
+
+    // REMOVED: AND u.role = 'alumni' filter - let's show all users with education records
+
+    if (search) {
+      query += ` AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)`;
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    if (batch_year) {
+      query += ` AND ae.end_year = ?`;
+      params.push(batch_year);
+    }
+
+    if (verified !== undefined && verified !== '') {
+      query += ` AND ae.is_verified = ?`;
+      params.push(verified === 'true' ? 1 : 0);
+    }
+
+    query += ` ORDER BY u.first_name ASC LIMIT ? OFFSET ?`;
+    params.push(parseInt(limit), offset);
+
+    console.log('Super Admin - Executing query:', query);
+    console.log('Super Admin - With params:', params);
+
+    const [alumni] = await db.query(query, params);
+
+    console.log('Super Admin - Alumni found:', alumni.length);
+
+    // Get total count
+    let countQuery = `
+      SELECT COUNT(DISTINCT u.user_id) as total
+      FROM alumni_education ae
+      JOIN users u ON ae.user_id = u.user_id
+      WHERE ae.school_id = ?
+    `;
+    const countParams = [schoolId];
+
+    if (search) {
+      countQuery += ` AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)`;
+      const searchTerm = `%${search}%`;
+      countParams.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    if (batch_year) {
+      countQuery += ` AND ae.end_year = ?`;
+      countParams.push(batch_year);
+    }
+
+    if (verified !== undefined && verified !== '') {
+      countQuery += ` AND ae.is_verified = ?`;
+      countParams.push(verified === 'true' ? 1 : 0);
+    }
+
+    const [countResult] = await db.query(countQuery, countParams);
+
+    console.log('Super Admin - Total count:', countResult[0].total);
+
+    res.json({
+      success: true,
+      alumni,
+      pagination: {
+        total: countResult[0].total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(countResult[0].total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get school alumni error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch school alumni',
       error: error.message
     });
   }

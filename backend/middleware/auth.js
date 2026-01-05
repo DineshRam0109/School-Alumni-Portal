@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 
-// Verify JWT token (works for both users and school admins)
+// Verify JWT token with 6 hours expiry (works for both users and school admins)
 exports.protect = async (req, res, next) => {
   try {
     let token;
@@ -14,75 +14,103 @@ exports.protect = async (req, res, next) => {
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: 'Not authorized to access this route'
+        message: 'Not authorized to access this route. Please login again.'
       });
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    try {
+      // Verify token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Check if school admin or regular user
-    if (decoded.type === 'school_admin') {
-      const [admins] = await db.query(
-        'SELECT admin_id, email, first_name, last_name, school_id, is_active FROM school_admins WHERE admin_id = ?',
-        [decoded.id]
-      );
-
-      if (!admins.length) {
+      // Check if token is expired (6 hours = 21600 seconds)
+      const currentTime = Math.floor(Date.now() / 1000);
+      if (decoded.exp && decoded.exp < currentTime) {
         return res.status(401).json({
           success: false,
-          message: 'School admin not found'
+          message: 'Session expired. Please login again.',
+          expired: true
         });
       }
 
-      if (!admins[0].is_active) {
-        return res.status(401).json({
-          success: false,
-          message: 'Account has been deactivated'
-        });
-      }
+      if (decoded.type === 'school_admin') {
+  const [admins] = await db.query(
+    'SELECT admin_id, email, first_name, last_name, school_id, is_active FROM school_admins WHERE admin_id = ?',
+    [decoded.id]
+  );
 
-      req.user = {
-        user_id: admins[0].admin_id,
-        email: admins[0].email,
-        first_name: admins[0].first_name,
-        last_name: admins[0].last_name,
-        role: 'school_admin',
-        school_id: admins[0].school_id,
-        type: 'school_admin'
-      };
-    } else {
-      // Regular user (alumni or super_admin)
-      const [users] = await db.query(
-        'SELECT user_id, email, role, first_name, last_name, is_verified, is_active FROM users WHERE user_id = ?',
-        [decoded.id]
-      );
-
-      if (!users.length) {
-        return res.status(401).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-
-      if (!users[0].is_active) {
-        return res.status(401).json({
-          success: false,
-          message: 'Account has been deactivated'
-        });
-      }
-
-      req.user = {
-        ...users[0],
-        type: 'user'
-      };
-    }
-
-    next();
-  } catch (error) {
+  if (!admins.length) {
     return res.status(401).json({
       success: false,
-      message: 'Not authorized to access this route'
+      message: 'School admin not found. Please login again.'
+    });
+  }
+
+  if (!admins[0].is_active) {
+    return res.status(401).json({
+      success: false,
+      message: 'Account has been deactivated. Please contact support.'
+    });
+  }
+
+  req.user = {
+    user_id: admins[0].admin_id,      // ✅ This is used in the controller
+    admin_id: admins[0].admin_id,     // ✅ Keep this too for clarity
+    email: admins[0].email,
+    first_name: admins[0].first_name,
+    last_name: admins[0].last_name,
+    role: 'school_admin',
+    school_id: admins[0].school_id,
+    type: 'school_admin'
+  };
+}
+else {
+        // Regular user (alumni or super_admin)
+        const [users] = await db.query(
+          'SELECT user_id, email, role, first_name, last_name, is_verified, is_active FROM users WHERE user_id = ?',
+          [decoded.id]
+        );
+
+        if (!users.length) {
+          return res.status(401).json({
+            success: false,
+            message: 'User not found. Please login again.'
+          });
+        }
+
+        if (!users[0].is_active) {
+          return res.status(401).json({
+            success: false,
+            message: 'Account has been deactivated. Please contact support.'
+          });
+        }
+
+        req.user = {
+          ...users[0],
+          type: 'user'
+        };
+      }
+
+      next();
+    } catch (jwtError) {
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Session expired after 6 hours. Please login again.',
+          expired: true
+        });
+      } else if (jwtError.name === 'JsonWebTokenError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token. Please login again.'
+        });
+      }
+      throw jwtError;
+    }
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication failed. Please login again.'
     });
   }
 };

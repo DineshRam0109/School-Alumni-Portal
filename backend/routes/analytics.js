@@ -9,6 +9,6 @@ router.get('/schools/:id', protect, authorize('super_admin', 'school_admin'), an
 router.get('/events', protect, authorize('super_admin', 'school_admin'), analyticsController.getEventAnalytics);
 router.get('/jobs', protect, authorize('super_admin', 'school_admin'), analyticsController.getJobAnalytics);
 router.post('/export', protect, authorize('super_admin'), analyticsController.exportReport);
-router.post('/reports/generate', protect, authorize('super_admin', 'school_admin'), analyticsController.generateComprehensiveReport);
+//router.post('/reports/generate', protect, authorize('super_admin', 'school_admin'), analyticsController.generateComprehensiveReport);
 
 module.exports = router;

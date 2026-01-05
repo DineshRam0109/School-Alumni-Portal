@@ -1,7 +1,28 @@
+
 const db = require('../config/database');
 const { createNotification } = require('./notificationController');
+const { getAvatarUrl } = require('../utils/profilePictureUtils');
+const getFileUrl = (filePath) => {
+  if (!filePath) return null;
+  if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    return filePath;
+  }
+  const cleanPath = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const baseUrl = process.env.API_URL || 'http://localhost:5000';
+  return cleanPath.startsWith('uploads/') 
+    ? `${baseUrl}/${cleanPath}` 
+    : `${baseUrl}/uploads/${cleanPath}`;
+};
 
-// @desc    Get all groups for current user (USER-CREATED GROUPS)
+// Helper function to determine file type
+function getFileType(mimeType) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
+// @desc    Get all groups for current user
 // @route   GET /api/groups
 // @access  Private
 exports.getMyGroups = async (req, res) => {
@@ -14,21 +35,23 @@ exports.getMyGroups = async (req, res) => {
         gm.last_read_at,
         (SELECT COUNT(*) 
          FROM group_members 
-         WHERE group_id = gc.group_id AND is_active = TRUE) as member_count,
+         WHERE group_id = gc.group_id 
+           AND is_active = TRUE) as member_count,
         (SELECT COUNT(*) 
          FROM group_messages gm2 
          WHERE gm2.group_id = gc.group_id 
            AND gm2.created_at > COALESCE(gm.last_read_at, '2000-01-01')
            AND gm2.sender_id != ?
-           AND gm2.deleted_by_sender = FALSE
-           AND NOT JSON_CONTAINS(COALESCE(gm2.deleted_by_members, '[]'), CAST(? AS JSON))) as unread_count,
+           AND gm2.deleted_by_sender = FALSE) as unread_count,
         (SELECT message_text 
          FROM group_messages 
          WHERE group_id = gc.group_id 
+           AND deleted_by_sender = FALSE
          ORDER BY created_at DESC LIMIT 1) as last_message,
         (SELECT created_at 
          FROM group_messages 
          WHERE group_id = gc.group_id 
+           AND deleted_by_sender = FALSE
          ORDER BY created_at DESC LIMIT 1) as last_message_time
        FROM group_chats gc
        JOIN group_members gm ON gc.group_id = gm.group_id
@@ -36,12 +59,12 @@ exports.getMyGroups = async (req, res) => {
          AND gm.is_active = TRUE 
          AND gc.is_active = TRUE
        ORDER BY last_message_time DESC`,
-      [req.user.user_id, req.user.user_id, req.user.user_id]
+      [req.user.user_id, req.user.user_id]
     );
 
     res.json({
       success: true,
-      groups
+      groups: groups
     });
   } catch (error) {
     console.error('Get groups error:', error);
@@ -53,7 +76,7 @@ exports.getMyGroups = async (req, res) => {
   }
 };
 
-// @desc    Create new group (USER-CREATED)
+// @desc    Create new group
 // @route   POST /api/groups
 // @access  Private
 exports.createGroup = async (req, res) => {
@@ -68,33 +91,26 @@ exports.createGroup = async (req, res) => {
       });
     }
 
-    if (!member_ids || !Array.isArray(member_ids) || member_ids.length === 0) {
+    let memberIds = member_ids;
+    if (typeof member_ids === 'string') {
+      try {
+        memberIds = JSON.parse(member_ids);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid member_ids format'
+        });
+      }
+    }
+
+    if (!memberIds || !Array.isArray(memberIds) || memberIds.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'At least one member is required'
       });
     }
 
-    // Verify all members are connections
-    const [connections] = await db.query(
-      `SELECT DISTINCT 
-        CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as user_id
-       FROM connections 
-       WHERE (sender_id = ? OR receiver_id = ?) 
-         AND status = 'accepted'
-         AND CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END IN (?)`,
-      [req.user.user_id, req.user.user_id, req.user.user_id, req.user.user_id, member_ids]
-    );
-
-    if (connections.length !== member_ids.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'You can only add your connections to the group'
-      });
-    }
-
-    // Create group
-    const avatarPath = groupAvatar ? `/uploads/groups/${groupAvatar.filename}` : null;
+    const avatarPath = groupAvatar ? groupAvatar.path.replace(/\\/g, '/').replace(/^uploads\//, '') : null;
     
     const [result] = await db.query(
       `INSERT INTO group_chats (group_name, group_description, group_avatar, created_by, group_type)
@@ -111,7 +127,7 @@ exports.createGroup = async (req, res) => {
     );
 
     // Add other members
-    const memberPromises = member_ids.map(userId =>
+    const memberPromises = memberIds.map(userId =>
       db.query(
         'INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, ?)',
         [groupId, userId, 'member']
@@ -119,8 +135,8 @@ exports.createGroup = async (req, res) => {
     );
     await Promise.all(memberPromises);
 
-    // Send notifications to invited members
-    const notificationPromises = member_ids.map(userId =>
+    // Send notifications
+    const notificationPromises = memberIds.map(userId =>
       createNotification(
         userId,
         'system',
@@ -131,7 +147,6 @@ exports.createGroup = async (req, res) => {
     );
     await Promise.all(notificationPromises);
 
-    // Get created group with details
     const [group] = await db.query(
       `SELECT gc.*, 
               (SELECT COUNT(*) FROM group_members WHERE group_id = gc.group_id AND is_active = TRUE) as member_count
@@ -155,7 +170,7 @@ exports.createGroup = async (req, res) => {
   }
 };
 
-// @desc    Update group (NAME, DESCRIPTION, AVATAR)
+// @desc    Update group
 // @route   PUT /api/groups/:id
 // @access  Private (Admin only)
 exports.updateGroup = async (req, res) => {
@@ -164,7 +179,6 @@ exports.updateGroup = async (req, res) => {
     const { group_name, group_description } = req.body;
     const groupAvatar = req.file;
 
-    // Check if user is admin
     const [membership] = await db.query(
       'SELECT role FROM group_members WHERE group_id = ? AND user_id = ? AND is_active = TRUE',
       [id, req.user.user_id]
@@ -192,7 +206,7 @@ exports.updateGroup = async (req, res) => {
 
     if (groupAvatar) {
       updates.push('group_avatar = ?');
-      values.push(`/uploads/groups/${groupAvatar.filename}`);
+      values.push(groupAvatar.path.replace(/\\/g, '/').replace(/^uploads\//, ''));
     }
 
     if (updates.length > 0) {
@@ -217,14 +231,13 @@ exports.updateGroup = async (req, res) => {
   }
 };
 
-// @desc    Get group details
+// @desc    Get group details - FIXED
 // @route   GET /api/groups/:id
 // @access  Private
 exports.getGroupDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if user is member
     const [membership] = await db.query(
       'SELECT role FROM group_members WHERE group_id = ? AND user_id = ? AND is_active = TRUE',
       [id, req.user.user_id]
@@ -237,7 +250,6 @@ exports.getGroupDetails = async (req, res) => {
       });
     }
 
-    // Get group details
     const [group] = await db.query(
       `SELECT gc.*,
               u.first_name as creator_first_name,
@@ -255,7 +267,6 @@ exports.getGroupDetails = async (req, res) => {
       });
     }
 
-    // Get members
     const [members] = await db.query(
       `SELECT u.user_id, u.first_name, u.last_name, u.profile_picture, 
               u.current_city, gm.role, gm.joined_at
@@ -271,11 +282,22 @@ exports.getGroupDetails = async (req, res) => {
       [id]
     );
 
+    // ✅ FIXED: Format member profile pictures correctly
+    const formattedMembers = members.map(member => ({
+      ...member,
+      profile_picture: member.profile_picture 
+        ? getFileUrl(member.profile_picture)
+        : null
+    }));
+
     res.json({
       success: true,
       group: {
         ...group[0],
-        members,
+        group_avatar: group[0].group_avatar 
+          ? getFileUrl(group[0].group_avatar)
+          : null,
+        members: formattedMembers,
         my_role: membership[0].role
       }
     });
@@ -304,7 +326,16 @@ exports.addGroupMembers = async (req, res) => {
       });
     }
 
-    // Check if requester is admin
+    // ✅ FIX: Ensure all member_ids are integers
+    const cleanMemberIds = member_ids.map(id => parseInt(id)).filter(id => !isNaN(id));
+
+    if (cleanMemberIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid member IDs provided'
+      });
+    }
+
     const [requester] = await db.query(
       'SELECT role FROM group_members WHERE group_id = ? AND user_id = ? AND is_active = TRUE',
       [id, req.user.user_id]
@@ -317,7 +348,6 @@ exports.addGroupMembers = async (req, res) => {
       });
     }
 
-    // Get group name for notifications
     const [group] = await db.query('SELECT group_name FROM group_chats WHERE group_id = ?', [id]);
 
     if (!group.length) {
@@ -327,62 +357,105 @@ exports.addGroupMembers = async (req, res) => {
       });
     }
 
-    // Verify all members are connections of the admin
-    const [connections] = await db.query(
-      `SELECT DISTINCT 
-        CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as user_id
-       FROM connections 
-       WHERE (sender_id = ? OR receiver_id = ?) 
-         AND status = 'accepted'
-         AND CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END IN (?)`,
-      [req.user.user_id, req.user.user_id, req.user.user_id, req.user.user_id, member_ids]
+    // ✅ FIX: Check for ANY existing member record (active or inactive)
+    const placeholders = cleanMemberIds.map(() => '?').join(',');
+    const [existingMembers] = await db.query(
+      `SELECT user_id FROM group_members 
+       WHERE group_id = ? AND user_id IN (${placeholders})`,
+      [id, ...cleanMemberIds]
     );
 
-    const validMembers = connections.map(c => c.user_id);
+    const existingIds = existingMembers.map(e => e.user_id);
+    
+    // Filter out users who are already in the group (in any state)
+    const newMembers = cleanMemberIds.filter(userId => !existingIds.includes(userId));
+    
+    // Check for users who are already members but inactive
+    const inactiveMembers = [];
+    for (const userId of existingIds) {
+      const [memberStatus] = await db.query(
+        'SELECT is_active FROM group_members WHERE group_id = ? AND user_id = ?',
+        [id, userId]
+      );
+      if (memberStatus.length && !memberStatus[0].is_active) {
+        inactiveMembers.push(userId);
+      }
+    }
 
-    // Check who's already in the group
-    const [existing] = await db.query(
-      'SELECT user_id FROM group_members WHERE group_id = ? AND user_id IN (?)',
-      [id, validMembers]
-    );
-
-    const existingIds = existing.map(e => e.user_id);
-    const newMembers = validMembers.filter(userId => !existingIds.includes(userId));
-
-    if (newMembers.length === 0) {
+    if (newMembers.length === 0 && inactiveMembers.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'All selected members are already in the group'
       });
     }
 
+    // ✅ FIX: Check valid users with proper SQL
+    const allUserIds = [...newMembers, ...inactiveMembers];
+    if (allUserIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid users found to add'
+      });
+    }
+
+    // Handle both new members and reactivating inactive members
+    const addPromises = [];
+    
     // Add new members
-    const addPromises = newMembers.map(userId =>
-      db.query(
-        'INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, ?)',
-        [id, userId, 'member']
-      )
-    );
+    for (const userId of newMembers) {
+      addPromises.push(
+        db.query(
+          'INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, ?)',
+          [id, userId, 'member']
+        )
+      );
+    }
+    
+    // Reactivate inactive members
+    for (const userId of inactiveMembers) {
+      addPromises.push(
+        db.query(
+          'UPDATE group_members SET is_active = TRUE, role = ? WHERE group_id = ? AND user_id = ?',
+          ['member', id, userId]
+        )
+      );
+    }
+    
     await Promise.all(addPromises);
 
-    // Send notifications
-    const notificationPromises = newMembers.map(userId =>
+    // Send notifications only to newly added/reactivated members
+    const notificationPromises = allUserIds.map(userId =>
       createNotification(
         userId,
         'system',
         'Added to Group',
         `${req.user.first_name} ${req.user.last_name} added you to "${group[0].group_name}"`,
-        id
+        parseInt(id)
       )
     );
+    
     await Promise.all(notificationPromises);
 
     res.json({
       success: true,
-      message: `${newMembers.length} member(s) added successfully`
+      message: `${allUserIds.length} member(s) added successfully`,
+      added_members: allUserIds,
+      details: {
+        new_members: newMembers,
+        reactivated_members: inactiveMembers
+      }
     });
   } catch (error) {
     console.error('Add members error:', error);
+    
+    // Provide more specific error message for duplicate entry
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({
+        success: false,
+        message: 'Some members are already in the group. Please refresh and try again.'
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Failed to add members',
@@ -398,7 +471,6 @@ exports.removeMember = async (req, res) => {
   try {
     const { id, userId } = req.params;
 
-    // Check if requester is admin
     const [requester] = await db.query(
       'SELECT role FROM group_members WHERE group_id = ? AND user_id = ? AND is_active = TRUE',
       [id, req.user.user_id]
@@ -411,7 +483,6 @@ exports.removeMember = async (req, res) => {
       });
     }
 
-    // Check if target is the creator
     const [group] = await db.query(
       'SELECT created_by FROM group_chats WHERE group_id = ?',
       [id]
@@ -424,7 +495,6 @@ exports.removeMember = async (req, res) => {
       });
     }
 
-    // Remove member
     await db.query(
       'UPDATE group_members SET is_active = FALSE WHERE group_id = ? AND user_id = ?',
       [id, userId]
@@ -459,7 +529,6 @@ exports.updateMemberRole = async (req, res) => {
       });
     }
 
-    // Check if requester is admin
     const [requester] = await db.query(
       'SELECT role FROM group_members WHERE group_id = ? AND user_id = ? AND is_active = TRUE',
       [id, req.user.user_id]
@@ -472,7 +541,18 @@ exports.updateMemberRole = async (req, res) => {
       });
     }
 
-    // Update role
+    const [group] = await db.query(
+      'SELECT created_by FROM group_chats WHERE group_id = ?',
+      [id]
+    );
+
+    if (group[0].created_by === parseInt(userId) && role === 'member') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot demote the group creator'
+      });
+    }
+
     await db.query(
       'UPDATE group_members SET role = ? WHERE group_id = ? AND user_id = ?',
       [role, id, userId]
@@ -480,7 +560,7 @@ exports.updateMemberRole = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Member role updated successfully'
+      message: `Member ${role === 'admin' ? 'promoted to admin' : 'demoted to member'} successfully`
     });
   } catch (error) {
     console.error('Update member role error:', error);
@@ -501,7 +581,6 @@ exports.sendGroupMessage = async (req, res) => {
     const { message_text } = req.body;
     const files = req.files;
 
-    // Check if user is member
     const [membership] = await db.query(
       'SELECT * FROM group_members WHERE group_id = ? AND user_id = ? AND is_active = TRUE',
       [id, req.user.user_id]
@@ -521,7 +600,6 @@ exports.sendGroupMessage = async (req, res) => {
       });
     }
 
-    // Insert message
     const [result] = await db.query(
       'INSERT INTO group_messages (group_id, sender_id, message_text, has_attachments) VALUES (?, ?, ?, ?)',
       [id, req.user.user_id, message_text?.trim() || '', files?.length > 0]
@@ -529,21 +607,30 @@ exports.sendGroupMessage = async (req, res) => {
 
     const messageId = result.insertId;
 
-    // Handle file attachments
+    const attachmentData = [];
     if (files && files.length > 0) {
-      const attachmentPromises = files.map(file => {
+      for (const file of files) {
         const fileType = getFileType(file.mimetype);
-        return db.query(
+        const filePath = file.path.replace(/\\/g, '/').replace(/^uploads\//, '');
+        
+        await db.query(
           `INSERT INTO group_message_attachments 
            (message_id, file_name, file_path, file_type, file_size, mime_type) 
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [messageId, file.originalname, file.path, fileType, file.size, file.mimetype]
+          [messageId, file.originalname, filePath, fileType, file.size, file.mimetype]
         );
-      });
-      await Promise.all(attachmentPromises);
+
+        attachmentData.push({
+          file_name: file.originalname,
+          file_path: filePath,
+          file_url: getFileUrl(filePath),
+          file_type: fileType,
+          file_size: file.size,
+          mime_type: file.mimetype
+        });
+      }
     }
 
-    // Get the created message
     const [message] = await db.query(
       `SELECT gm.*, 
               u.first_name as sender_first_name, 
@@ -555,18 +642,15 @@ exports.sendGroupMessage = async (req, res) => {
       [messageId]
     );
 
-    // Get attachments
-    const [attachments] = await db.query(
-      'SELECT * FROM group_message_attachments WHERE message_id = ?',
-      [messageId]
-    );
-
     res.status(201).json({
       success: true,
       message: 'Message sent successfully',
       data: {
         ...message[0],
-        attachments
+        sender_profile_picture: message[0].sender_profile_picture 
+          ? getFileUrl(message[0].sender_profile_picture)
+          : null,
+        attachments: attachmentData
       }
     });
   } catch (error) {
@@ -579,7 +663,10 @@ exports.sendGroupMessage = async (req, res) => {
   }
 };
 
-// @desc    Get group messages
+// @desc    Get group messages - FIXED
+// @route   GET /api/groups/:id/messages
+// @access  Private
+// @desc    Get group messages - FIXED
 // @route   GET /api/groups/:id/messages
 // @access  Private
 exports.getGroupMessages = async (req, res) => {
@@ -588,20 +675,26 @@ exports.getGroupMessages = async (req, res) => {
     const { page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
 
-    // Check if user is member
+    // Check membership
     const [membership] = await db.query(
-      'SELECT * FROM group_members WHERE group_id = ? AND user_id = ? AND is_active = TRUE',
+      `SELECT gm.*, gc.is_active as group_active
+       FROM group_members gm 
+       JOIN group_chats gc ON gm.group_id = gc.group_id 
+       WHERE gm.group_id = ? 
+         AND gm.user_id = ? 
+         AND gm.is_active = TRUE 
+         AND gc.is_active = TRUE`,
       [id, req.user.user_id]
     );
 
     if (!membership.length) {
       return res.status(403).json({
         success: false,
-        message: 'You are not a member of this group'
+        message: 'You are not a member of this group or the group is inactive'
       });
     }
 
-    // Get messages
+    // Get messages - IMPORTANT: Filter based on deletion status
     const [messages] = await db.query(
       `SELECT gm.*, 
               u.first_name as sender_first_name, 
@@ -610,34 +703,51 @@ exports.getGroupMessages = async (req, res) => {
        FROM group_messages gm
        JOIN users u ON gm.sender_id = u.user_id
        WHERE gm.group_id = ?
-         AND NOT (gm.deleted_by_sender = TRUE AND gm.sender_id = ?)
-         AND NOT (
-           gm.deleted_by_members IS NOT NULL 
-           AND JSON_CONTAINS(gm.deleted_by_members, CAST(? AS JSON))
+         AND (
+           -- Show message if not deleted by sender (for sender's own messages)
+           (gm.sender_id = ? AND gm.deleted_by_sender = FALSE)
+           OR
+           -- Show message if not deleted by current member (for other's messages)
+           (gm.sender_id != ? AND (
+             gm.deleted_by_members IS NULL 
+             OR 
+             NOT JSON_CONTAINS(gm.deleted_by_members, CAST(? AS JSON))
+           ))
          )
        ORDER BY gm.created_at DESC
        LIMIT ? OFFSET ?`,
-      [id, req.user.user_id, req.user.user_id, parseInt(limit), offset]
+      [id, req.user.user_id, req.user.user_id, JSON.stringify(req.user.user_id), parseInt(limit), offset]
     );
 
-    // Get attachments for all messages
-    if (messages.length > 0) {
-      const messageIds = messages.map(m => m.message_id);
+    // ✅ FIXED: Format sender profile pictures
+    const formattedMessages = messages.map(msg => ({
+      ...msg,
+      sender_profile_picture: msg.sender_profile_picture 
+        ? getFileUrl(msg.sender_profile_picture)
+        : null
+    }));
+
+    // Get attachments
+    if (formattedMessages.length > 0) {
+      const messageIds = formattedMessages.map(m => m.message_id);
+      
       const [attachments] = await db.query(
         `SELECT * FROM group_message_attachments WHERE message_id IN (?)`,
         [messageIds]
       );
 
-      // Group attachments by message_id
       const attachmentsByMessage = {};
       attachments.forEach(att => {
         if (!attachmentsByMessage[att.message_id]) {
           attachmentsByMessage[att.message_id] = [];
         }
-        attachmentsByMessage[att.message_id].push(att);
+        attachmentsByMessage[att.message_id].push({
+          ...att,
+          file_url: getFileUrl(att.file_path)
+        });
       });
 
-      messages.forEach(msg => {
+      formattedMessages.forEach(msg => {
         msg.attachments = attachmentsByMessage[msg.message_id] || [];
       });
     }
@@ -650,10 +760,11 @@ exports.getGroupMessages = async (req, res) => {
 
     res.json({
       success: true,
-      messages: messages.reverse(),
+      messages: formattedMessages.reverse(),
       pagination: {
         page: parseInt(page),
-        limit: parseInt(limit)
+        limit: parseInt(limit),
+        total: formattedMessages.length
       }
     });
   } catch (error) {
@@ -666,6 +777,9 @@ exports.getGroupMessages = async (req, res) => {
   }
 };
 
+// @desc    Delete group message
+// @route   DELETE /api/groups/messages/:messageId
+// @access  Private
 // @desc    Delete group message
 // @route   DELETE /api/groups/messages/:messageId
 // @access  Private
@@ -689,6 +803,7 @@ exports.deleteGroupMessage = async (req, res) => {
     const msg = message[0];
 
     if (delete_for === 'everyone') {
+      // Only sender can delete for everyone
       if (msg.sender_id !== req.user.user_id) {
         return res.status(403).json({
           success: false,
@@ -706,23 +821,41 @@ exports.deleteGroupMessage = async (req, res) => {
         });
       }
 
+      // Delete for everyone (actually delete from database)
+      await db.query('DELETE FROM group_message_attachments WHERE message_id = ?', [messageId]);
       await db.query('DELETE FROM group_messages WHERE message_id = ?', [messageId]);
+      
     } else {
+      // Delete for self (soft delete)
       if (msg.sender_id === req.user.user_id) {
+        // Sender deleting for themselves
         await db.query(
           'UPDATE group_messages SET deleted_by_sender = TRUE WHERE message_id = ?',
           [messageId]
         );
       } else {
-        const deletedBy = msg.deleted_by_members ? JSON.parse(msg.deleted_by_members) : [];
-        if (!deletedBy.includes(req.user.user_id)) {
-          deletedBy.push(req.user.user_id);
+        // Non-sender deleting for themselves
+        // Check if already deleted by this member
+        let deletedByMembers = [];
+        
+        if (msg.deleted_by_members) {
+          try {
+            deletedByMembers = JSON.parse(msg.deleted_by_members);
+          } catch (e) {
+            console.error('Error parsing deleted_by_members:', e);
+            deletedByMembers = [];
+          }
         }
         
-        await db.query(
-          'UPDATE group_messages SET deleted_by_members = ? WHERE message_id = ?',
-          [JSON.stringify(deletedBy), messageId]
-        );
+        // Check if current user already marked this message as deleted
+        if (!deletedByMembers.includes(req.user.user_id)) {
+          deletedByMembers.push(req.user.user_id);
+          
+          await db.query(
+            'UPDATE group_messages SET deleted_by_members = ? WHERE message_id = ?',
+            [JSON.stringify(deletedByMembers), messageId]
+          );
+        }
       }
     }
 
@@ -747,7 +880,6 @@ exports.leaveGroup = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if user is the creator
     const [group] = await db.query(
       'SELECT created_by FROM group_chats WHERE group_id = ?',
       [id]
@@ -786,7 +918,6 @@ exports.deleteGroup = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if user is the creator
     const [group] = await db.query(
       'SELECT created_by FROM group_chats WHERE group_id = ?',
       [id]
@@ -806,7 +937,6 @@ exports.deleteGroup = async (req, res) => {
       });
     }
 
-    // Soft delete the group
     await db.query(
       'UPDATE group_chats SET is_active = FALSE WHERE group_id = ?',
       [id]
@@ -825,13 +955,5 @@ exports.deleteGroup = async (req, res) => {
     });
   }
 };
-
-// Helper function
-function getFileType(mimeType) {
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('video/')) return 'video';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  return 'document';
-}
 
 module.exports = exports;

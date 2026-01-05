@@ -1,8 +1,5 @@
 const db = require('../config/database');
 
-// @desc    Create job posting
-// @route   POST /api/jobs
-// @access  Private
 exports.createJob = async (req, res) => {
   try {
     const {
@@ -19,7 +16,13 @@ exports.createJob = async (req, res) => {
       application_url
     } = req.body;
 
-    // Validation
+    if (req.user.role === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Super administrators cannot post jobs. Only alumni and school administrators can post jobs.'
+      });
+    }
+
     if (!company_name || !job_title || !job_description) {
       return res.status(400).json({
         success: false,
@@ -27,18 +30,42 @@ exports.createJob = async (req, res) => {
       });
     }
 
-    // Handle empty date - convert empty string to NULL
+    if (!application_url || application_url.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Application URL is required'
+      });
+    }
+
+    try {
+      new URL(application_url);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid application URL'
+      });
+    }
+
     const deadline = application_deadline && application_deadline.trim() !== '' 
       ? application_deadline 
       : null;
 
+    let posterId;
+    if (req.user.role === 'school_admin') {
+      posterId = req.user.admin_id || req.user.user_id;
+    } else {
+      posterId = req.user.user_id;
+    }
+    const posterType = req.user.role;
+
     const [result] = await db.query(
-      `INSERT INTO jobs (posted_by, company_name, job_title, job_description, job_type,
+      `INSERT INTO jobs (posted_by, posted_by_type, company_name, job_title, job_description, job_type,
                         experience_level, location, is_remote, salary_range, skills_required,
                         application_deadline, application_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        req.user.user_id,
+        posterId,
+        posterType,
         company_name,
         job_title,
         job_description,
@@ -49,7 +76,7 @@ exports.createJob = async (req, res) => {
         salary_range || null,
         skills_required || null,
         deadline,
-        application_url || null
+        application_url
       ]
     );
 
@@ -68,9 +95,6 @@ exports.createJob = async (req, res) => {
   }
 };
 
-// @desc    Get all jobs
-// @route   GET /api/jobs
-// @access  Public
 exports.getAllJobs = async (req, res) => {
   try {
     const { 
@@ -80,22 +104,96 @@ exports.getAllJobs = async (req, res) => {
       experience_level, 
       location, 
       is_remote,
-      search 
+      search,
+      school_id,
+      show_past = 'false'
     } = req.query;
     
     const offset = (page - 1) * limit;
 
     let query = `
-      SELECT j.*, 
-             u.first_name, 
-             u.last_name, 
-             u.profile_picture,
-             (SELECT COUNT(*) FROM job_applications WHERE job_id = j.job_id) as application_count
+      SELECT 
+             j.job_id,
+             j.posted_by,
+             j.posted_by_type,
+             j.company_name,
+             j.job_title,
+             j.job_description,
+             j.job_type,
+             j.experience_level,
+             j.location,
+             j.is_remote,
+             j.salary_range,
+             j.skills_required,
+             j.application_deadline,
+             j.application_url,
+             j.is_active,
+             j.views_count,
+             j.created_at,
+             j.updated_at,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN NULL
+               WHEN j.posted_by_type = 'super_admin' THEN NULL
+               WHEN j.posted_by_type = 'alumni' THEN u.first_name
+               ELSE NULL
+             END as first_name,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN NULL
+               WHEN j.posted_by_type = 'super_admin' THEN NULL
+               WHEN j.posted_by_type = 'alumni' THEN u.last_name
+               ELSE NULL
+             END as last_name,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN sa.profile_picture
+               WHEN j.posted_by_type = 'super_admin' THEN su.profile_picture
+               WHEN j.posted_by_type = 'alumni' THEN u.profile_picture
+               ELSE NULL
+             END as profile_picture,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN sa.email
+               WHEN j.posted_by_type = 'super_admin' THEN su.email
+               WHEN j.posted_by_type = 'alumni' THEN u.email
+               ELSE NULL
+             END as email,
+             s.school_id as poster_school_id,
+             s.school_name as poster_school_name,
+             ae.school_id as alumni_school_id,
+             s2.school_name as alumni_school_name,
+             (SELECT COUNT(*) FROM job_applications ja2 WHERE ja2.job_id = j.job_id) as application_count,
+             CASE 
+               WHEN j.application_deadline IS NOT NULL AND j.application_deadline < CURDATE() THEN TRUE
+               ELSE FALSE
+             END as is_past_deadline
       FROM jobs j
-      JOIN users u ON j.posted_by = u.user_id
+      LEFT JOIN school_admins sa ON j.posted_by = sa.admin_id AND j.posted_by_type = 'school_admin'
+      LEFT JOIN users u ON j.posted_by = u.user_id AND j.posted_by_type = 'alumni'
+      LEFT JOIN users su ON j.posted_by = su.user_id AND j.posted_by_type = 'super_admin'
+      LEFT JOIN schools s ON sa.school_id = s.school_id
+      LEFT JOIN (
+        SELECT user_id, school_id 
+        FROM alumni_education 
+        GROUP BY user_id, school_id
+      ) ae ON u.user_id = ae.user_id AND j.posted_by_type = 'alumni'
+      LEFT JOIN schools s2 ON ae.school_id = s2.school_id
       WHERE j.is_active = TRUE
     `;
     const params = [];
+
+    // ✅ FIXED: Deadline comparison - past jobs only if deadline is before today
+    if (show_past === 'true') {
+      query += ` AND (j.application_deadline IS NOT NULL AND j.application_deadline < CURDATE())`;
+    } else {
+      query += ` AND (j.application_deadline IS NULL OR j.application_deadline >= CURDATE())`;
+    }
+
+    if (req.user && req.user.role === 'school_admin') {
+      query += ` AND (sa.school_id = ? OR ae.school_id = ?)`;
+      params.push(req.user.school_id, req.user.school_id);
+    } 
+    else if (school_id) {
+      query += ` AND (sa.school_id = ? OR ae.school_id = ?)`;
+      params.push(school_id, school_id);
+    }
 
     if (job_type) {
       query += ` AND j.job_type = ?`;
@@ -127,9 +225,36 @@ exports.getAllJobs = async (req, res) => {
 
     const [jobs] = await db.query(query, params);
 
-    // Get total count
-    let countQuery = `SELECT COUNT(*) as total FROM jobs j WHERE j.is_active = TRUE`;
+    let countQuery = `
+      SELECT COUNT(DISTINCT j.job_id) as total 
+      FROM jobs j
+      LEFT JOIN school_admins sa ON j.posted_by = sa.admin_id AND j.posted_by_type = 'school_admin'
+      LEFT JOIN users u ON j.posted_by = u.user_id AND j.posted_by_type = 'alumni'
+      LEFT JOIN users su ON j.posted_by = su.user_id AND j.posted_by_type = 'super_admin'
+      LEFT JOIN schools s ON sa.school_id = s.school_id
+      LEFT JOIN (
+        SELECT user_id, school_id 
+        FROM alumni_education 
+        GROUP BY user_id, school_id
+      ) ae ON u.user_id = ae.user_id AND j.posted_by_type = 'alumni'
+      WHERE j.is_active = TRUE
+    `;
     const countParams = [];
+
+    // ✅ FIXED: Same deadline logic for count
+    if (show_past === 'true') {
+      countQuery += ` AND (j.application_deadline IS NOT NULL AND j.application_deadline < CURDATE())`;
+    } else {
+      countQuery += ` AND (j.application_deadline IS NULL OR j.application_deadline >= CURDATE())`;
+    }
+
+    if (req.user && req.user.role === 'school_admin') {
+      countQuery += ` AND (sa.school_id = ? OR ae.school_id = ?)`;
+      countParams.push(req.user.school_id, req.user.school_id);
+    } else if (school_id) {
+      countQuery += ` AND (sa.school_id = ? OR ae.school_id = ?)`;
+      countParams.push(school_id, school_id);
+    }
 
     if (job_type) {
       countQuery += ` AND j.job_type = ?`;
@@ -178,25 +303,79 @@ exports.getAllJobs = async (req, res) => {
   }
 };
 
-// @desc    Get job by ID
-// @route   GET /api/jobs/:id
-// @access  Public
 exports.getJobById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [jobs] = await db.query(
-      `SELECT j.*, 
-              u.first_name, 
-              u.last_name, 
-              u.profile_picture,
-              u.email,
-              (SELECT COUNT(*) FROM job_applications WHERE job_id = j.job_id) as application_count
-       FROM jobs j
-       JOIN users u ON j.posted_by = u.user_id
-       WHERE j.job_id = ? AND j.is_active = TRUE`,
-      [id]
-    );
+    const query = `
+      SELECT 
+             j.job_id,
+             j.posted_by,
+             j.posted_by_type,
+             j.company_name,
+             j.job_title,
+             j.job_description,
+             j.job_type,
+             j.experience_level,
+             j.location,
+             j.is_remote,
+             j.salary_range,
+             j.skills_required,
+             j.application_deadline,
+             j.application_url,
+             j.is_active,
+             j.views_count,
+             j.created_at,
+             j.updated_at,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN NULL
+               WHEN j.posted_by_type = 'super_admin' THEN NULL
+               WHEN j.posted_by_type = 'alumni' THEN u.first_name
+               ELSE NULL
+             END as first_name,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN NULL
+               WHEN j.posted_by_type = 'super_admin' THEN NULL
+               WHEN j.posted_by_type = 'alumni' THEN u.last_name
+               ELSE NULL
+             END as last_name,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN sa.profile_picture
+               WHEN j.posted_by_type = 'super_admin' THEN su.profile_picture
+               WHEN j.posted_by_type = 'alumni' THEN u.profile_picture
+               ELSE NULL
+             END as profile_picture,
+             CASE 
+               WHEN j.posted_by_type = 'school_admin' THEN sa.email
+               WHEN j.posted_by_type = 'super_admin' THEN su.email
+               WHEN j.posted_by_type = 'alumni' THEN u.email
+               ELSE NULL
+             END as email,
+             s.school_id as poster_school_id,
+             s.school_name as poster_school_name,
+             ae.school_id as alumni_school_id,
+             s2.school_name as alumni_school_name,
+             (SELECT COUNT(*) FROM job_applications ja WHERE ja.job_id = j.job_id) as application_count,
+             CASE 
+               WHEN j.application_deadline IS NOT NULL AND j.application_deadline < CURDATE() THEN TRUE
+               ELSE FALSE
+             END as is_past_deadline
+      FROM jobs j
+      LEFT JOIN school_admins sa ON j.posted_by = sa.admin_id AND j.posted_by_type = 'school_admin'
+      LEFT JOIN users u ON j.posted_by = u.user_id AND j.posted_by_type = 'alumni'
+      LEFT JOIN users su ON j.posted_by = su.user_id AND j.posted_by_type = 'super_admin'
+      LEFT JOIN schools s ON sa.school_id = s.school_id
+      LEFT JOIN (
+        SELECT user_id, school_id 
+        FROM alumni_education 
+        GROUP BY user_id, school_id
+        LIMIT 1
+      ) ae ON u.user_id = ae.user_id AND j.posted_by_type = 'alumni'
+      LEFT JOIN schools s2 ON ae.school_id = s2.school_id
+      WHERE j.job_id = ? AND j.is_active = TRUE
+    `;
+
+    const [jobs] = await db.query(query, [id]);
 
     if (!jobs.length) {
       return res.status(404).json({
@@ -205,7 +384,6 @@ exports.getJobById = async (req, res) => {
       });
     }
 
-    // Increment view count
     await db.query(
       'UPDATE jobs SET views_count = views_count + 1 WHERE job_id = ?',
       [id]
@@ -225,104 +403,12 @@ exports.getJobById = async (req, res) => {
   }
 };
 
-// @desc    Update job
-// @route   PUT /api/jobs/:id
-// @access  Private
-exports.updateJob = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const {
-      company_name,
-      job_title,
-      job_description,
-      job_type,
-      experience_level,
-      location,
-      is_remote,
-      salary_range,
-      skills_required,
-      application_deadline,
-      application_url
-    } = req.body;
-
-    // Check if user owns this job
-    const [jobs] = await db.query(
-      'SELECT posted_by FROM jobs WHERE job_id = ?',
-      [id]
-    );
-
-    if (!jobs.length) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
-    }
-
-    if (jobs[0].posted_by !== req.user.user_id && req.user.role !== 'super_admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to update this job'
-      });
-    }
-
-    // Handle empty date
-    const deadline = application_deadline && application_deadline.trim() !== '' 
-      ? application_deadline 
-      : null;
-
-    await db.query(
-      `UPDATE jobs SET
-        company_name = COALESCE(?, company_name),
-        job_title = COALESCE(?, job_title),
-        job_description = COALESCE(?, job_description),
-        job_type = COALESCE(?, job_type),
-        experience_level = COALESCE(?, experience_level),
-        location = ?,
-        is_remote = COALESCE(?, is_remote),
-        salary_range = ?,
-        skills_required = ?,
-        application_deadline = ?,
-        application_url = ?
-       WHERE job_id = ?`,
-      [
-        company_name,
-        job_title,
-        job_description,
-        job_type,
-        experience_level,
-        location,
-        is_remote,
-        salary_range,
-        skills_required,
-        deadline,
-        application_url,
-        id
-      ]
-    );
-
-    res.json({
-      success: true,
-      message: 'Job updated successfully'
-    });
-  } catch (error) {
-    console.error('Update job error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update job',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Delete job
-// @route   DELETE /api/jobs/:id
-// @access  Private
 exports.deleteJob = async (req, res) => {
   try {
     const { id } = req.params;
 
     const [jobs] = await db.query(
-      'SELECT posted_by FROM jobs WHERE job_id = ?',
+      'SELECT posted_by, posted_by_type FROM jobs WHERE job_id = ?',
       [id]
     );
 
@@ -333,7 +419,14 @@ exports.deleteJob = async (req, res) => {
       });
     }
 
-    if (jobs[0].posted_by !== req.user.user_id && req.user.role !== 'super_admin') {
+    let posterId;
+    if (req.user.role === 'school_admin') {
+      posterId = req.user.admin_id || req.user.user_id;
+    } else {
+      posterId = req.user.user_id;
+    }
+    
+    if (jobs[0].posted_by !== posterId || jobs[0].posted_by_type !== req.user.role) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to delete this job'
@@ -359,312 +452,3 @@ exports.deleteJob = async (req, res) => {
   }
 };
 
-// @desc    Apply for job
-// @route   POST /api/jobs/:id/apply
-// @access  Private
-exports.applyForJob = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { cover_letter } = req.body;
-
-    // Check if job exists
-    const [jobs] = await db.query(
-      'SELECT job_id FROM jobs WHERE job_id = ? AND is_active = TRUE',
-      [id]
-    );
-
-    if (!jobs.length) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
-    }
-
-    // Check if already applied
-    const [existing] = await db.query(
-      'SELECT application_id FROM job_applications WHERE job_id = ? AND user_id = ?',
-      [id, req.user.user_id]
-    );
-
-    if (existing.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'You have already applied for this job'
-      });
-    }
-
-    // Get resume URL from uploaded file or use existing
-    const resume_url = req.file ? `/uploads/resumes/${req.file.filename}` : null;
-
-    if (!resume_url && !req.user.resume_url) {
-      return res.status(400).json({
-        success: false,
-        message: 'Resume is required for job application'
-      });
-    }
-
-    const finalResumeUrl = resume_url || req.user.resume_url;
-
-    await db.query(
-      'INSERT INTO job_applications (job_id, user_id, cover_letter, resume_url) VALUES (?, ?, ?, ?)',
-      [id, req.user.user_id, cover_letter, finalResumeUrl]
-    );
-
-    res.status(201).json({
-      success: true,
-      message: 'Application submitted successfully'
-    });
-  } catch (error) {
-    console.error('Apply for job error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to submit application',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Get my job applications
-// @route   GET /api/jobs/my-applications
-// @access  Private
-exports.getMyApplications = async (req, res) => {
-  try {
-    const [applications] = await db.query(
-      `SELECT ja.*, j.job_title, j.company_name, j.location, j.job_type,
-              u.first_name as poster_first_name, u.last_name as poster_last_name
-       FROM job_applications ja
-       JOIN jobs j ON ja.job_id = j.job_id
-       JOIN users u ON j.posted_by = u.user_id
-       WHERE ja.user_id = ?
-       ORDER BY ja.applied_at DESC`,
-      [req.user.user_id]
-    );
-
-    res.json({
-      success: true,
-      applications
-    });
-  } catch (error) {
-    console.error('Get my applications error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch applications',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Get applications for my job postings
-// @route   GET /api/jobs/:id/applications
-// @access  Private
-exports.getJobApplications = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Check if user owns this job
-    const [jobs] = await db.query(
-      'SELECT posted_by FROM jobs WHERE job_id = ?',
-      [id]
-    );
-
-    if (!jobs.length) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
-    }
-
-    if (jobs[0].posted_by !== req.user.user_id && req.user.role !== 'super_admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view applications'
-      });
-    }
-
-    const [applications] = await db.query(
-      `SELECT ja.*, 
-              u.first_name, u.last_name, u.email, u.phone, u.profile_picture,
-              u.current_city, u.current_country
-       FROM job_applications ja
-       JOIN users u ON ja.user_id = u.user_id
-       WHERE ja.job_id = ?
-       ORDER BY ja.applied_at DESC`,
-      [id]
-    );
-
-    res.json({
-      success: true,
-      applications
-    });
-  } catch (error) {
-    console.error('Get job applications error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch applications',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Update application status
-// @route   PATCH /api/jobs/applications/:id/status
-// @access  Private
-exports.updateApplicationStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-
-    const validStatuses = ['applied', 'shortlisted', 'interviewed', 'offered', 'rejected', 'withdrawn'];
-    
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid status'
-      });
-    }
-
-    // Check if user owns the job this application belongs to
-    const [applications] = await db.query(
-      `SELECT ja.application_id, j.posted_by 
-       FROM job_applications ja
-       JOIN jobs j ON ja.job_id = j.job_id
-       WHERE ja.application_id = ?`,
-      [id]
-    );
-
-    if (!applications.length) {
-      return res.status(404).json({
-        success: false,
-        message: 'Application not found'
-      });
-    }
-
-    if (applications[0].posted_by !== req.user.user_id && req.user.role !== 'super_admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to update this application'
-      });
-    }
-
-    await db.query(
-      'UPDATE job_applications SET status = ? WHERE application_id = ?',
-      [status, id]
-    );
-
-    res.json({
-      success: true,
-      message: 'Application status updated successfully'
-    });
-  } catch (error) {
-    console.error('Update application status error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update application status',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Refer for job - MISSING FUNCTION
-// @route   POST /api/jobs/:id/refer
-// @access  Private
-exports.referForJob = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { referred_email, message } = req.body;
-
-    // Check if job exists
-    const [jobs] = await db.query(
-      'SELECT job_id, job_title, company_name FROM jobs WHERE job_id = ? AND is_active = TRUE',
-      [id]
-    );
-
-    if (!jobs.length) {
-      return res.status(404).json({
-        success: false,
-        message: 'Job not found'
-      });
-    }
-
-    // Create job referral record
-    await db.query(
-      'INSERT INTO job_referrals (job_id, referrer_id, referred_email, message) VALUES (?, ?, ?, ?)',
-      [id, req.user.user_id, referred_email, message]
-    );
-
-    res.status(201).json({
-      success: true,
-      message: 'Job referral sent successfully'
-    });
-  } catch (error) {
-    console.error('Refer for job error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to send job referral',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Create job alert - MISSING FUNCTION
-// @route   POST /api/jobs/alerts
-// @access  Private
-exports.createJobAlert = async (req, res) => {
-  try {
-    const { keywords, job_type, location, is_remote, frequency } = req.body;
-
-    if (!keywords) {
-      return res.status(400).json({
-        success: false,
-        message: 'Keywords are required for job alert'
-      });
-    }
-
-    await db.query(
-      'INSERT INTO job_alerts (user_id, keywords, job_type, location, is_remote, frequency) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.user.user_id, keywords, job_type, location, is_remote || false, frequency || 'daily']
-    );
-
-    res.status(201).json({
-      success: true,
-      message: 'Job alert created successfully'
-    });
-  } catch (error) {
-    console.error('Create job alert error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create job alert',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Get companies with alumni - MISSING FUNCTION
-// @route   GET /api/jobs/companies/alumni
-// @access  Private
-exports.getCompaniesWithAlumni = async (req, res) => {
-  try {
-    const [companies] = await db.query(
-      `SELECT DISTINCT we.company_name, COUNT(DISTINCT we.user_id) as alumni_count
-       FROM work_experience we
-       JOIN users u ON we.user_id = u.user_id
-       WHERE u.is_active = TRUE AND we.company_name IS NOT NULL
-       GROUP BY we.company_name
-       HAVING alumni_count > 0
-       ORDER BY alumni_count DESC
-       LIMIT 50`
-    );
-
-    res.json({
-      success: true,
-      companies
-    });
-  } catch (error) {
-    console.error('Get companies with alumni error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch companies',
-      error: error.message
-    });
-  }
-};
