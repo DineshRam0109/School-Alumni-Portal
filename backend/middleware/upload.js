@@ -2,20 +2,30 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// Detect serverless environment and use appropriate base directory
+const isLambda = !!process.env.LAMBDA_TASK_ROOT || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+const baseUploadDir = isLambda ? '/tmp/uploads' : 'uploads';
+
 // Create required upload directories
 const createUploadDirs = () => {
   const dirs = [
-    'uploads',
-    'uploads/profiles',
-    'uploads/messages',
-    'uploads/group-messages',
-    'uploads/documents',
-    'uploads/schools'
+    baseUploadDir,
+    path.join(baseUploadDir, 'profiles'),
+    path.join(baseUploadDir, 'messages'),
+    path.join(baseUploadDir, 'group-messages'),
+    path.join(baseUploadDir, 'documents'),
+    path.join(baseUploadDir, 'schools')
   ];
   
   dirs.forEach(dir => {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+        console.log(`✅ Created directory: ${dir}`);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to create directory ${dir}:`, error.message);
+      // Don't throw - let the app continue and fail on actual upload if needed
     }
   });
 };
@@ -25,7 +35,7 @@ createUploadDirs();
 // Storage configurations
 const profileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/profiles/');
+    cb(null, path.join(baseUploadDir, 'profiles'));
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -35,7 +45,7 @@ const profileStorage = multer.diskStorage({
 
 const messageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/messages/');
+    cb(null, path.join(baseUploadDir, 'messages'));
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -45,7 +55,7 @@ const messageStorage = multer.diskStorage({
 
 const groupMessageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/group-messages/');
+    cb(null, path.join(baseUploadDir, 'group-messages'));
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -53,10 +63,9 @@ const groupMessageStorage = multer.diskStorage({
   }
 });
 
-// ✅ ADD THIS - Group avatar storage (reuses profiles folder)
 const groupAvatarStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/profiles/');
+    cb(null, path.join(baseUploadDir, 'profiles'));
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -66,7 +75,7 @@ const groupAvatarStorage = multer.diskStorage({
 
 const schoolLogoStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/schools/');
+    cb(null, path.join(baseUploadDir, 'schools'));
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -144,7 +153,6 @@ const uploadGroupMessageAttachments = multer({
   fileFilter: attachmentFileFilter
 });
 
-// ✅ ADD THIS - Group avatar upload
 const uploadGroupAvatar = multer({
   storage: groupAvatarStorage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
@@ -217,7 +225,7 @@ module.exports = {
   uploadProfilePicture,
   uploadMessageAttachments,
   uploadGroupMessageAttachments,
-  uploadGroupAvatar,           // ✅ ADD THIS
+  uploadGroupAvatar,
   uploadSchoolLogo,
   
   // Middleware
@@ -225,5 +233,8 @@ module.exports = {
   
   // Utility functions
   deleteFile,
-  getFileUrl
+  getFileUrl,
+  
+  // Export base directory for reference
+  baseUploadDir
 };
