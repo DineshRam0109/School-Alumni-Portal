@@ -40,7 +40,7 @@ const Login = () => {
     setIsAnimating(true);
     
     setTimeout(() => {
-      if (loginType === 'school_admin' || loginType === 'super_admin') {
+      if (loginType === 'school_admin') {
         dispatch(schoolAdminLogin(formData));
       } else {
         dispatch(login(formData));
