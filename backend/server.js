@@ -168,7 +168,6 @@ app.use((err, req, res, next) => {
 
 // 10. 404 handler - MUST be LAST
 app.use('*', (req, res) => {
-  console.log(`❌ 404: ${req.method} ${req.originalUrl}`);
   res.status(404).json({
     success: false,
     message: `Route ${req.originalUrl} not found`,
@@ -181,10 +180,7 @@ const PORT = process.env.PORT || 5000;
 // Only start server locally (not in Vercel)
 if (process.env.VERCEL !== '1') {
   app.listen(PORT, () => {
-    console.log(`\n🚀 Server running on port ${PORT}`);
-    console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 API Base: http://localhost:${PORT}/api`);
-    console.log(`🔗 Health check: http://localhost:${PORT}/api/health\n`);
+     console.log("Working")
   });
 }
 

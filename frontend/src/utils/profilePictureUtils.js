@@ -1,5 +1,3 @@
-// FRONTEND VERSION - For React components
-// Fixed to handle /api in base URL correctly
 
 // ✅ Get the base URL without /api for static files
 const getBaseUrl = () => {
@@ -18,8 +16,7 @@ const BASE_URL = getBaseUrl();
  * @returns {string} Full URL to the avatar image
  */
 export const getAvatarUrl = (userOrPath, firstName, lastName) => {
-  console.log('[getAvatarUrl] Input:', { userOrPath, firstName, lastName });
-  
+    
   let profilePicture, fName, lName;
   
   // Handle both object parameter and separate parameters
@@ -33,53 +30,44 @@ export const getAvatarUrl = (userOrPath, firstName, lastName) => {
     lName = lastName;
   }
   
-  console.log('[getAvatarUrl] Parsed:', { profilePicture, fName, lName });
-  console.log('[getAvatarUrl] BASE_URL:', BASE_URL);
-  
+      
   // If profile picture exists
   if (profilePicture && typeof profilePicture === 'string' && profilePicture.trim()) {
     // Already a full URL
     if (profilePicture.startsWith('http://') || profilePicture.startsWith('https://')) {
-      console.log('[getAvatarUrl] Returning full URL:', profilePicture);
-      return profilePicture;
+            return profilePicture;
     }
     
     // Relative path starting with uploads/
     if (profilePicture.startsWith('uploads/')) {
       const url = `${BASE_URL}/${profilePicture}`;
-      console.log('[getAvatarUrl] Returning uploads path:', url);
-      return url;
+            return url;
     }
     
     // Just filename (e.g., "profiles/profile-123.jpg")
     const url = `${BASE_URL}/uploads/${profilePicture}`;
-    console.log('[getAvatarUrl] Returning filename path:', url);
-    return url;
+        return url;
   }
   
   // Fallback to initials avatar
   if (fName || lName) {
     const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(fName || '')}+${encodeURIComponent(lName || '')}&background=random&size=128`;
-    console.log('[getAvatarUrl] Returning initials fallback:', fallback);
-    return fallback;
+        return fallback;
   }
   
   // Default avatar
   const defaultUrl = `https://ui-avatars.com/api/?name=User&background=random&size=128`;
-  console.log('[getAvatarUrl] Returning default:', defaultUrl);
-  return defaultUrl;
+    return defaultUrl;
 };
 
 /**
  * Handle image loading errors with fallback
  */
 export const handleImageError = (e, firstName, lastName) => {
-  console.log('[handleImageError] Image failed to load:', e.target.src);
-  const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(firstName || 'User')}+${encodeURIComponent(lastName || 'Name')}&background=random&size=128`;
+    const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(firstName || 'User')}+${encodeURIComponent(lastName || 'Name')}&background=random&size=128`;
   
   if (e.target.src !== fallbackUrl) {
-    console.log('[handleImageError] Setting fallback:', fallbackUrl);
-    e.target.src = fallbackUrl;
+        e.target.src = fallbackUrl;
   }
   e.target.onerror = null;
 };

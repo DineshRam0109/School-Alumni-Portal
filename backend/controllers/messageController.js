@@ -144,8 +144,7 @@ exports.getConversation = async (req, res) => {
     const { userId } = req.params;
     const { limit = 100 } = req.query;
 
-    console.log('[getConversation] User ID:', userId, 'Current User:', req.user.user_id);
-
+    
     // Check if user exists
     const [userCheck] = await db.query(
       'SELECT user_id FROM users WHERE user_id = ? AND is_active = TRUE',
@@ -167,8 +166,7 @@ exports.getConversation = async (req, res) => {
       [req.user.user_id, userId, userId, req.user.user_id]
     );
 
-    console.log('[getConversation] Connection found:', connection.length > 0);
-
+    
     // Try to check mentorship (optional)
     let hasMentorship = false;
     try {
@@ -179,10 +177,8 @@ exports.getConversation = async (req, res) => {
         [req.user.user_id, userId, userId, req.user.user_id]
       );
       hasMentorship = mentorship.length > 0;
-      console.log('[getConversation] Mentorship found:', hasMentorship);
-    } catch (error) {
-      console.log('[getConversation] Mentorship table not available, skipping check');
-    }
+          } catch (error) {
+          }
 
     // Allow if connected OR have mentorship
     if (!connection.length && !hasMentorship) {
@@ -216,8 +212,7 @@ exports.getConversation = async (req, res) => {
       ]
     );
 
-    console.log('[getConversation] Messages found:', messages.length);
-
+    
     // Get attachments for messages
     const messageIds = messages.map(m => m.message_id);
     let attachments = [];

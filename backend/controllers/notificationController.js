@@ -349,8 +349,7 @@ exports.deleteAllNotifications = async (req, res) => {
       [req.user.user_id, ...userAllowedTypes]
     );
 
-    console.log(`Deleted ${result.affectedRows} notifications for user ${req.user.user_id}`);
-
+    
     res.json({
       success: true,
       message: 'All notifications deleted successfully',

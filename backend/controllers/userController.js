@@ -458,8 +458,7 @@ exports.changePassword = async (req, res) => {
     // Send email notification
     try {
       await sendPasswordChangedEmail(userEmail, userName);
-      console.log('✓ Password changed confirmation email sent to:', userEmail);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('✗ Password changed email failed:', emailError);
       // Don't fail the request if email fails
     }

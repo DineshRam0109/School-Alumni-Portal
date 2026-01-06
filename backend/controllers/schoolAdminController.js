@@ -231,8 +231,7 @@ exports.verifyAlumni = async (req, res) => {
         `${education[0].first_name} ${education[0].last_name}`,
         education[0].school_name
       );
-      console.log('✓ Verification approval email sent to:', education[0].email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Verification approval email failed:', emailError);
     }
 

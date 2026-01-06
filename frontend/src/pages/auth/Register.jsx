@@ -36,8 +36,7 @@ const Register = () => {
   // CRITICAL FIX: Proper token and user check
   useEffect(() => {
     if (token && user) {
-      console.log('Registration successful, redirecting to dashboard...');
-      toast.success('Registration successful! Welcome aboard! 🎉');
+            toast.success('Registration successful! Welcome aboard! 🎉');
       
       // Determine redirect based on role
       const redirectPath = 
@@ -137,8 +136,7 @@ const Register = () => {
     // Remove confirm_password before submission
     const { confirm_password, ...submitData } = formData;
     
-    console.log('Submitting registration data:', submitData);
-    
+        
     // Dispatch registration action
     dispatch(register(submitData));
   };
@@ -149,24 +147,8 @@ const Register = () => {
     { number: 3, title: 'Education', icon: FaSchool }
   ];
 
-  const getPasswordStrength = () => {
-    const password = formData.password;
-    if (!password) return { strength: 0, label: '', color: '' };
-    
-    let strength = 0;
-    if (password.length >= 6) strength++;
-    if (password.length >= 10) strength++;
-    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) strength++;
-    if (/\d/.test(password)) strength++;
-    if (/[^a-zA-Z\d]/.test(password)) strength++;
-    
-    const labels = ['Very Weak', 'Weak', 'Fair', 'Good', 'Strong'];
-    const colors = ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-blue-500', 'bg-green-500'];
-    
-    return { strength, label: labels[strength - 1] || '', color: colors[strength - 1] || '' };
-  };
+ 
 
-  const passwordStrength = getPasswordStrength();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-violet-500 via-purple-500 to-fuchsia-500 flex items-center justify-center px-4 py-12 relative overflow-hidden">
@@ -378,25 +360,7 @@ const Register = () => {
                           {showPassword ? '👁️' : '👁️‍🗨️'}
                         </button>
                       </div>
-                      {formData.password && (
-                        <div className="mt-2">
-                          <div className="flex items-center justify-between text-xs mb-1">
-                            <span className="text-gray-600">Password strength:</span>
-                            <span className={`font-semibold ${
-                              passwordStrength.strength >= 3 ? 'text-green-600' : 
-                              passwordStrength.strength >= 2 ? 'text-yellow-600' : 'text-red-600'
-                            }`}>
-                              {passwordStrength.label}
-                            </span>
-                          </div>
-                          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full ${passwordStrength.color} transition-all`}
-                              style={{ width: `${(passwordStrength.strength / 5) * 100}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
+                      
                     </div>
 
                     <div>

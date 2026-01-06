@@ -90,8 +90,7 @@ exports.requestMentorship = async (req, res) => {
         area_of_guidance.trim(),
         mentorshipId
       );
-      console.log('✓ Mentorship request email sent to:', mentorCheck[0].email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Mentorship request email failed:', emailError);
     }
 
@@ -137,7 +136,7 @@ exports.getMentorshipsAsMentor = async (req, res) => {
 
     const formattedMentorships = mentorships.map(m => ({
       ...m,
-      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture) : null
+      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture) : null  // Pass just the string
     }));
 
     res.json({
@@ -153,7 +152,6 @@ exports.getMentorshipsAsMentor = async (req, res) => {
   }
 };
 
-// Update getMentorshipsAsMentee:
 exports.getMentorshipsAsMentee = async (req, res) => {
   try {
     const [mentorships] = await db.query(
@@ -177,11 +175,10 @@ exports.getMentorshipsAsMentee = async (req, res) => {
       [req.user.user_id]
     );
 
-     const formattedMentorships = mentorships.map(m => ({
+    const formattedMentorships = mentorships.map(m => ({
       ...m,
-      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture) : null
+      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture) : null  // Pass just the string
     }));
-
 
     res.json({
       success: true,
@@ -252,8 +249,7 @@ exports.acceptMentorship = async (req, res) => {
         req.user.user_id,
         id
       );
-      console.log('✓ Mentorship accepted email sent to:', mentorshipData.email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Mentorship accepted email failed:', emailError);
     }
 
@@ -316,8 +312,7 @@ exports.rejectMentorship = async (req, res) => {
         `${mentorshipData.first_name} ${mentorshipData.last_name}`,
         `${req.user.first_name} ${req.user.last_name}`
       );
-      console.log('✓ Mentorship rejected email sent to:', mentorshipData.email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Mentorship rejected email failed:', emailError);
     }
 
@@ -403,8 +398,7 @@ exports.completeMentorship = async (req, res) => {
         `${mentorshipData.mentor_first_name} ${mentorshipData.mentor_last_name}`,
         id
       );
-      console.log('✓ Mentorship completed emails sent');
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Mentorship completed email failed:', emailError);
     }
 
@@ -593,8 +587,7 @@ exports.scheduleSession = async (req, res) => {
           session_description: description?.trim() || ''
         }
       );
-      console.log('✓ Session scheduled email sent to:', otherUserEmail);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Session scheduled email failed:', emailError);
     }
 

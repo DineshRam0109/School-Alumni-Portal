@@ -46,8 +46,7 @@ const Profile = () => {
 useEffect(() => {
   if (profile) {
     const newUrl = getAvatarUrl(profile);
-    console.log('[Profile] Updated profile picture URL:', newUrl);
-    setProfilePictureUrl(newUrl);
+        setProfilePictureUrl(newUrl);
   }
 }, [profile]);
 
@@ -57,8 +56,7 @@ useEffect(() => {
       const newProfilePicture = currentUser.profile_picture;
       
       if (currentProfilePicture !== newProfilePicture) {
-        console.log('[Profile] Profile picture changed, updating...');
-        setProfile(prev => ({
+                setProfile(prev => ({
           ...prev,
           profile_picture: newProfilePicture
         }));
@@ -92,12 +90,10 @@ useEffect(() => {
   const fetchProfile = async () => {
     try {
       setLoading(true);
-      console.log('[Profile] Fetching profile for user ID:', id);
-      const response = await userService.getProfile(id);
+            const response = await userService.getProfile(id);
       
       if (response.data.user) {
-        console.log('[Profile] Profile fetched successfully');
-        setProfile(response.data.user);
+                setProfile(response.data.user);
       } else {
         throw new Error('No user data in response');
       }

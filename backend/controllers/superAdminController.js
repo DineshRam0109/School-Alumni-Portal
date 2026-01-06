@@ -221,8 +221,7 @@ exports.createSchoolAdmin = async (req, res) => {
         school[0].school_name,
         loginUrl
       );
-      console.log('✓ School admin assignment email sent to:', email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('✖ Failed to send school admin assignment email:', emailError);
       // Don't fail the request if email fails
     }
@@ -787,13 +786,10 @@ exports.getSchoolAlumni = async (req, res) => {
     query += ` ORDER BY u.first_name ASC LIMIT ? OFFSET ?`;
     params.push(parseInt(limit), offset);
 
-    console.log('Super Admin - Executing query:', query);
-    console.log('Super Admin - With params:', params);
-
+        
     const [alumni] = await db.query(query, params);
 
-    console.log('Super Admin - Alumni found:', alumni.length);
-
+    
     // Get total count
     let countQuery = `
       SELECT COUNT(DISTINCT u.user_id) as total
@@ -821,8 +817,7 @@ exports.getSchoolAlumni = async (req, res) => {
 
     const [countResult] = await db.query(countQuery, countParams);
 
-    console.log('Super Admin - Total count:', countResult[0].total);
-
+    
     res.json({
       success: true,
       alumni,

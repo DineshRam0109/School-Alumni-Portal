@@ -17,8 +17,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }) => {
  useEffect(() => {
   if (user) {
     const url = getAvatarUrl(user.profile_picture, user.first_name, user.last_name);
-    console.log('[Sidebar] Profile picture URL:', url);
-    setProfilePictureUrl(url);
+        setProfilePictureUrl(url);
   }
 }, [user, user?.profile_picture]);
 
@@ -94,8 +93,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }) => {
 
   // ✅ Fallback image handler
   const handleImageError = (e) => {
-    console.log('[Sidebar] Image load error, using fallback');
-    const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.first_name || 'User')}+${encodeURIComponent(user?.last_name || 'Name')}&size=128&background=random`;
+        const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.first_name || 'User')}+${encodeURIComponent(user?.last_name || 'Name')}&size=128&background=random`;
     if (e.target.src !== fallbackUrl) {
       e.target.src = fallbackUrl;
     }

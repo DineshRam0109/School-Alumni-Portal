@@ -85,8 +85,7 @@ const SchoolAdminProfile = () => {
         }
       });
       
-      console.log('Upload response:', response.data);
-      
+            
       toast.success('Profile picture updated successfully!');
       
       const newProfilePicture = response.data.profile_picture;
@@ -132,8 +131,7 @@ const SchoolAdminProfile = () => {
         }
       });
       
-      console.log('School logo upload response:', response.data);
-      
+            
       toast.success('School logo updated successfully! The logo will be visible across the platform.');
       
       const newLogo = response.data.logo;

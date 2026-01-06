@@ -105,8 +105,7 @@ exports.sendRequest = async (req, res) => {
         `${req.user.first_name} ${req.user.last_name}`,
         sender_id
       );
-      console.log('✓ Connection request email sent to:', receiver[0].email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Connection request email failed:', emailError);
       // Don't fail the request if email fails
     }
@@ -354,8 +353,7 @@ exports.acceptRequest = async (req, res) => {
         `${req.user.first_name} ${req.user.last_name}`,
         req.user.user_id
       );
-      console.log('✓ Connection accepted email sent to:', connection.email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Connection accepted email failed:', emailError);
       // Don't fail the request if email fails
     }

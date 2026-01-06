@@ -134,9 +134,7 @@ exports.searchAlumni = async (req, res) => {
     query += ` ORDER BY u.first_name ASC, u.last_name ASC LIMIT ? OFFSET ?`;
     params.push(parseInt(limit), parseInt(offset));
 
-    console.log('SQL Query:', query);
-    console.log('SQL Params:', params);
-
+        
     const [users] = await db.query(query, params);
 
     // Get details for each user
@@ -283,9 +281,7 @@ exports.searchAlumni = async (req, res) => {
       countQuery += ` AND ` + countConditions.join(' AND ');
     }
 
-    console.log('Count Query:', countQuery);
-    console.log('Count Params:', countParams);
-
+        
     const [countResult] = await db.query(countQuery, countParams);
     const total = countResult[0]?.total || 0;
 
@@ -402,8 +398,7 @@ exports.findBatchMates = async (req, res) => {
 
 exports.getSearchFilters = async (req, res) => {
   try {
-    console.log('Fetching search filters...');
-    
+        
     const [schools, cities, countries, companies, batchYears] = await Promise.all([
       // Get schools with alumni count (don't filter by current user)
       db.query(
@@ -471,12 +466,7 @@ exports.getSearchFilters = async (req, res) => {
       )
     ]);
 
-    console.log('Schools found:', schools[0].length);
-    console.log('Cities found:', cities[0].length);
-    console.log('Countries found:', countries[0].length);
-    console.log('Companies found:', companies[0].length);
-    console.log('Batch years found:', batchYears[0].length);
-
+                    
     res.json({
       success: true,
       filters: {

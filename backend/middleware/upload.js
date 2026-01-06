@@ -21,8 +21,7 @@ const createUploadDirs = () => {
     try {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
-        console.log(`✅ Created directory: ${dir}`);
-      }
+              }
     } catch (error) {
       console.error(`❌ Failed to create directory ${dir}:`, error.message);
       // Don't throw - let the app continue and fail on actual upload if needed

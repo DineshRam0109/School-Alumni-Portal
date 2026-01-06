@@ -104,8 +104,7 @@ const register = async (req, res) => {
             email,
             schoolAdmin[0].school_name
           );
-          console.log('✓ New alumni registration email sent to school admin');
-        }
+                  }
       } catch (notifError) {
         console.error('Failed to send admin notification:', notifError);
       }
@@ -276,8 +275,7 @@ const verifyEmail = async (req, res) => {
 
 // Forgot Password - ALUMNI
 const forgotPassword = async (req, res) => {
-  console.log('🔵 forgotPassword called');
-  try {
+    try {
     const { email } = req.body;
 
     if (!email) {
@@ -287,51 +285,43 @@ const forgotPassword = async (req, res) => {
       });
     }
 
-    console.log('📧 Searching for user with email:', email);
-
+    
     const [users] = await db.query(
       'SELECT user_id, first_name, last_name, email FROM users WHERE email = ?', 
       [email]
     );
 
     if (users.length === 0) {
-      console.log('❌ No user found with email:', email);
-      return res.status(404).json({ 
+            return res.status(404).json({ 
         success: false, 
         message: 'No account found with this email' 
       });
     }
 
     const user = users[0];
-    console.log('✓ User found:', user.first_name, user.last_name);
-
+    
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour
 
-    console.log('🔑 Generated reset token:', resetToken);
-
+    
     await db.query(
       'UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE user_id = ?',
       [resetToken, resetTokenExpiry, user.user_id]
     );
 
-    console.log('✓ Token saved to database');
-
+    
     // ✅ SEND PASSWORD RESET EMAIL
     try {
       const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
       
-      console.log('📧 Attempting to send email to:', email);
-      console.log('🔗 Reset URL:', resetUrl);
-
+            
       await sendPasswordResetEmail(
         email,
         `${user.first_name} ${user.last_name}`,
         resetUrl
       );
       
-      console.log('✅ Password reset email sent successfully to:', email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Failed to send reset email:', emailError);
       console.error('Email error details:', emailError.message);
       
@@ -356,8 +346,7 @@ const forgotPassword = async (req, res) => {
 
 // School Admin Forgot Password
 const schoolAdminForgotPassword = async (req, res) => {
-  console.log('🔵 schoolAdminForgotPassword called');
-  try {
+    try {
     const { email } = req.body;
 
     if (!email) {
@@ -367,51 +356,43 @@ const schoolAdminForgotPassword = async (req, res) => {
       });
     }
 
-    console.log('📧 Searching for school admin with email:', email);
-
+    
     const [admins] = await db.query(
       'SELECT admin_id, first_name, last_name, email FROM school_admins WHERE email = ?', 
       [email]
     );
 
     if (admins.length === 0) {
-      console.log('❌ No school admin found with email:', email);
-      return res.status(404).json({ 
+            return res.status(404).json({ 
         success: false, 
         message: 'No school admin account found with this email' 
       });
     }
 
     const admin = admins[0];
-    console.log('✓ School admin found:', admin.first_name, admin.last_name);
-
+    
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour
 
-    console.log('🔑 Generated reset token:', resetToken);
-
+    
     await db.query(
       'UPDATE school_admins SET reset_token = ?, reset_token_expiry = ? WHERE admin_id = ?',
       [resetToken, resetTokenExpiry, admin.admin_id]
     );
 
-    console.log('✓ Token saved to database');
-
+    
     // ✅ SEND PASSWORD RESET EMAIL
     try {
       const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}&type=school_admin`;
       
-      console.log('📧 Attempting to send email to:', email);
-      console.log('🔗 Reset URL:', resetUrl);
-
+            
       await sendPasswordResetEmail(
         email,
         `${admin.first_name} ${admin.last_name}`,
         resetUrl
       );
       
-      console.log('✅ Password reset email sent successfully to:', email);
-    } catch (emailError) {
+          } catch (emailError) {
       console.error('❌ Failed to send reset email:', emailError);
       console.error('Email error details:', emailError.message);
       
@@ -513,8 +494,7 @@ const resetPassword = async (req, res) => {
           userInfo[0].email,
           `${userInfo[0].first_name} ${userInfo[0].last_name}`
         );
-        console.log('✅ Password changed email sent');
-      }
+              }
     } catch (emailError) {
       console.error('❌ Failed to send password changed email:', emailError);
       // Don't fail the password reset if email fails
