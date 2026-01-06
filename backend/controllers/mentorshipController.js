@@ -9,6 +9,15 @@ const {
   sendSessionScheduledEmail
 } = require('../utils/emailService');
 
+// Helper function to safely get API URL with HTTPS
+const getApiUrl = () => {
+  const apiUrl = process.env.API_URL || 'http://localhost:5000';
+  if (process.env.NODE_ENV === 'production') {
+    return apiUrl.replace(/^http:/, 'https:');
+  }
+  return apiUrl;
+};
+
 // @desc    Request mentorship
 // @route   POST /api/mentorship/request
 // @access  Private
@@ -80,7 +89,6 @@ exports.requestMentorship = async (req, res) => {
       ]
     );
 
-    // ✅ SEND EMAIL
     try {
       await sendMentorshipRequestEmail(
         mentorCheck[0].email,
@@ -90,8 +98,8 @@ exports.requestMentorship = async (req, res) => {
         area_of_guidance.trim(),
         mentorshipId
       );
-          } catch (emailError) {
-      console.error('❌ Mentorship request email failed:', emailError);
+    } catch (emailError) {
+      console.error('Mentorship request email failed:', emailError);
     }
 
     res.status(201).json({
@@ -107,9 +115,6 @@ exports.requestMentorship = async (req, res) => {
     });
   }
 };
-
-
-
 
 exports.getMentorshipsAsMentor = async (req, res) => {
   try {
@@ -134,9 +139,10 @@ exports.getMentorshipsAsMentor = async (req, res) => {
       [req.user.user_id]
     );
 
+    const baseUrl = getApiUrl();
     const formattedMentorships = mentorships.map(m => ({
       ...m,
-      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture) : null  // Pass just the string
+      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture, baseUrl) : null
     }));
 
     res.json({
@@ -144,7 +150,7 @@ exports.getMentorshipsAsMentor = async (req, res) => {
       mentorships: formattedMentorships
     });
   } catch (error) {
-    console.error('Get mentorships error:', error);
+    console.error('Get mentorships as mentor error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch mentorships'
@@ -175,9 +181,10 @@ exports.getMentorshipsAsMentee = async (req, res) => {
       [req.user.user_id]
     );
 
+    const baseUrl = getApiUrl();
     const formattedMentorships = mentorships.map(m => ({
       ...m,
-      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture) : null  // Pass just the string
+      profile_picture: m.profile_picture ? getAvatarUrl(m.profile_picture, baseUrl) : null
     }));
 
     res.json({
@@ -185,14 +192,13 @@ exports.getMentorshipsAsMentee = async (req, res) => {
       mentorships: formattedMentorships
     });
   } catch (error) {
-    console.error('Get mentorships error:', error);
+    console.error('Get mentorships as mentee error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch mentorships'
     });
   }
 };
-
 
 // @desc    Accept mentorship
 // @route   PUT /api/mentorship/:id/accept
@@ -240,7 +246,6 @@ exports.acceptMentorship = async (req, res) => {
       ]
     );
 
-    // ✅ SEND EMAIL
     try {
       await sendMentorshipAcceptedEmail(
         mentorshipData.email,
@@ -249,8 +254,8 @@ exports.acceptMentorship = async (req, res) => {
         req.user.user_id,
         id
       );
-          } catch (emailError) {
-      console.error('❌ Mentorship accepted email failed:', emailError);
+    } catch (emailError) {
+      console.error('Mentorship accepted email failed:', emailError);
     }
 
     res.json({
@@ -305,15 +310,14 @@ exports.rejectMentorship = async (req, res) => {
       ]
     );
 
-    // ✅ SEND EMAIL
     try {
       await sendMentorshipRejectedEmail(
         mentorshipData.email,
         `${mentorshipData.first_name} ${mentorshipData.last_name}`,
         `${req.user.first_name} ${req.user.last_name}`
       );
-          } catch (emailError) {
-      console.error('❌ Mentorship rejected email failed:', emailError);
+    } catch (emailError) {
+      console.error('Mentorship rejected email failed:', emailError);
     }
 
     res.json({
@@ -382,24 +386,21 @@ exports.completeMentorship = async (req, res) => {
       ]
     );
 
-    // ✅ SEND EMAILS TO BOTH
     try {
-      // Email to mentor
       await sendMentorshipCompletedEmail(
         mentorshipData.mentor_email,
         `${mentorshipData.mentor_first_name} ${mentorshipData.mentor_last_name}`,
         `${mentorshipData.mentee_first_name} ${mentorshipData.mentee_last_name}`,
         id
       );
-      // Email to mentee
       await sendMentorshipCompletedEmail(
         mentorshipData.mentee_email,
         `${mentorshipData.mentee_first_name} ${mentorshipData.mentee_last_name}`,
         `${mentorshipData.mentor_first_name} ${mentorshipData.mentor_last_name}`,
         id
       );
-          } catch (emailError) {
-      console.error('❌ Mentorship completed email failed:', emailError);
+    } catch (emailError) {
+      console.error('Mentorship completed email failed:', emailError);
     }
 
     res.json({
@@ -573,7 +574,6 @@ exports.scheduleSession = async (req, res) => {
       ]
     );
 
-    // ✅ SEND EMAIL TO OTHER USER
     try {
       await sendSessionScheduledEmail(
         otherUserEmail,
@@ -587,8 +587,8 @@ exports.scheduleSession = async (req, res) => {
           session_description: description?.trim() || ''
         }
       );
-          } catch (emailError) {
-      console.error('❌ Session scheduled email failed:', emailError);
+    } catch (emailError) {
+      console.error('Session scheduled email failed:', emailError);
     }
 
     res.status(201).json({
@@ -604,11 +604,6 @@ exports.scheduleSession = async (req, res) => {
     });
   }
 };
-
-
-
-
-
 
 // @desc    Complete session
 // @route   POST /api/mentorship/sessions/:sessionId/complete
@@ -792,8 +787,6 @@ exports.createGoal = async (req, res) => {
     });
   }
 };
-
-
 
 // @desc    Update goal progress
 // @route   PUT /api/mentorship/goals/:goalId/progress

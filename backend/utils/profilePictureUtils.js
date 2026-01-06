@@ -5,29 +5,39 @@ const fs = require('fs');
 /**
  * Get avatar URL for backend responses
  * @param {string} profilePicture - Profile picture path from database
- * @param {string} baseUrl - Base URL of the API (e.g., http://localhost:5000)
- * @returns {string} Full URL or relative path
+ * @param {string} baseUrl - Base URL of the API (e.g., https://school-alumni-portal.vercel.app)
+ * @returns {string} Full URL or null
  */
 function getAvatarUrl(profilePicture, baseUrl = process.env.API_URL || 'http://localhost:5000') {
   // If no profile picture, return null (let frontend handle the fallback)
   if (!profilePicture || typeof profilePicture !== 'string') {
-    return null;  // Changed from returning default-avatar.png
+    return null;
   }
   
-  // If it's already a full URL, return as-is
+  // If it's already a full URL, ensure it's HTTPS in production
   if (profilePicture.startsWith('http://') || profilePicture.startsWith('https://')) {
+    // Force HTTPS in production
+    if (process.env.NODE_ENV === 'production') {
+      return profilePicture.replace(/^http:/, 'https:');
+    }
     return profilePicture;
   }
   
   // Clean the path
   const cleanPath = profilePicture.replace(/\\/g, '/').replace(/^\/+/, '');
   
-  // Return full URL
-  if (cleanPath.startsWith('uploads/')) {
-    return `${baseUrl}/${cleanPath}`;
+  // Ensure baseUrl is HTTPS in production
+  let finalBaseUrl = baseUrl;
+  if (process.env.NODE_ENV === 'production') {
+    finalBaseUrl = baseUrl.replace(/^http:/, 'https:');
   }
   
-  return `${baseUrl}/uploads/${cleanPath}`;
+  // Return full URL
+  if (cleanPath.startsWith('uploads/')) {
+    return `${finalBaseUrl}/${cleanPath}`;
+  }
+  
+  return `${finalBaseUrl}/uploads/${cleanPath}`;
 }
 
 /**
@@ -59,8 +69,11 @@ function formatPathForDatabase(filePath) {
 function getCompleteFileUrl(req, filePath) {
   if (!filePath) return null;
   
-  // If already a full URL, return as-is
+  // If already a full URL, ensure HTTPS in production
   if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    if (process.env.NODE_ENV === 'production') {
+      return filePath.replace(/^http:/, 'https:');
+    }
     return filePath;
   }
   
@@ -72,7 +85,9 @@ function getCompleteFileUrl(req, filePath) {
     ? cleanPath 
     : `uploads/${cleanPath}`;
   
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  // Use HTTPS in production
+  const protocol = process.env.NODE_ENV === 'production' ? 'https' : req.protocol;
+  const baseUrl = `${protocol}://${req.get('host')}`;
   return `${baseUrl}/${finalPath}`;
 }
 
@@ -83,7 +98,6 @@ function getInitialsAvatar(firstName, lastName, size = 128) {
   const name = `${firstName || ''} ${lastName || ''}`.trim();
   if (!name) return null;
   
-  // You can use a service or generate locally
   return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random&size=${size}`;
 }
 
