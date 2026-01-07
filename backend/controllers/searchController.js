@@ -25,12 +25,7 @@ exports.searchAlumni = async (req, res) => {
     const offset = (page - 1) * limit;
     const currentUserId = req.user.user_id;
 
-    // DEBUG: Log the request
-    console.log('Search request:', { 
-      user: req.user.user_id, 
-      role: req.user.role,
-      filters: { search, school_id, batch_year, city, country, company, profession, degree_level }
-    });
+   
 
     // Base query - Get DISTINCT users (avoid duplicates for multiple schools)
     // EXCLUDE CURRENT USER
