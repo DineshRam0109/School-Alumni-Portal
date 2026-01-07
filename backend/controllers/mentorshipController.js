@@ -9,15 +9,16 @@ const {
   sendSessionScheduledEmail
 } = require('../utils/emailService');
 
-// Helper function to safely get API URL with HTTPS
+
+
 const getApiUrl = () => {
   const apiUrl = process.env.API_URL || 'http://localhost:5000';
-  if (process.env.NODE_ENV === 'production') {
+  // Always use HTTPS in production/Vercel
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
     return apiUrl.replace(/^http:/, 'https:');
   }
   return apiUrl;
 };
-
 // @desc    Request mentorship
 // @route   POST /api/mentorship/request
 // @access  Private

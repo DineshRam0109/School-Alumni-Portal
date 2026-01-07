@@ -3,36 +3,29 @@ const path = require('path');
 const fs = require('fs');
 
 /**
- * Get avatar URL for backend responses
+ * Get avatar URL for backend responses with proper HTTPS handling
  * @param {string} profilePicture - Profile picture path from database
- * @param {string} baseUrl - Base URL of the API (e.g., https://school-alumni-portal.vercel.app)
+ * @param {string} baseUrl - Base URL of the API
  * @returns {string} Full URL or null
  */
-function getAvatarUrl(profilePicture, baseUrl = process.env.API_URL || 'http://localhost:5000') {
-  // If no profile picture, return null (let frontend handle the fallback)
+function getAvatarUrl(profilePicture, baseUrl) {
+  // If no profile picture, return null
   if (!profilePicture || typeof profilePicture !== 'string') {
     return null;
   }
   
-  // If it's already a full URL, ensure it's HTTPS in production
+  // Get the base URL with HTTPS enforcement
+  const finalBaseUrl = getSecureBaseUrl(baseUrl);
+  
+  // If it's already a full URL, ensure it's HTTPS
   if (profilePicture.startsWith('http://') || profilePicture.startsWith('https://')) {
-    // Force HTTPS in production
-    if (process.env.NODE_ENV === 'production') {
-      return profilePicture.replace(/^http:/, 'https:');
-    }
-    return profilePicture;
+    return profilePicture.replace(/^http:/, 'https:');
   }
   
   // Clean the path
   const cleanPath = profilePicture.replace(/\\/g, '/').replace(/^\/+/, '');
   
-  // Ensure baseUrl is HTTPS in production
-  let finalBaseUrl = baseUrl;
-  if (process.env.NODE_ENV === 'production') {
-    finalBaseUrl = baseUrl.replace(/^http:/, 'https:');
-  }
-  
-  // Return full URL
+  // Return full URL with HTTPS
   if (cleanPath.startsWith('uploads/')) {
     return `${finalBaseUrl}/${cleanPath}`;
   }
@@ -41,8 +34,21 @@ function getAvatarUrl(profilePicture, baseUrl = process.env.API_URL || 'http://l
 }
 
 /**
+ * Get secure base URL with HTTPS in production
+ */
+function getSecureBaseUrl(baseUrl) {
+  const url = baseUrl || process.env.API_URL || 'http://localhost:5000';
+  
+  // Always use HTTPS in production (Vercel)
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    return url.replace(/^http:/, 'https:');
+  }
+  
+  return url;
+}
+
+/**
  * Format file path for database storage
- * Removes the base uploads/ path and normalizes slashes
  */
 function formatPathForDatabase(filePath) {
   if (!filePath) return '';
@@ -69,12 +75,9 @@ function formatPathForDatabase(filePath) {
 function getCompleteFileUrl(req, filePath) {
   if (!filePath) return null;
   
-  // If already a full URL, ensure HTTPS in production
+  // If already a full URL, ensure HTTPS
   if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-    if (process.env.NODE_ENV === 'production') {
-      return filePath.replace(/^http:/, 'https:');
-    }
-    return filePath;
+    return filePath.replace(/^http:/, 'https:');
   }
   
   // Clean the path
@@ -85,14 +88,17 @@ function getCompleteFileUrl(req, filePath) {
     ? cleanPath 
     : `uploads/${cleanPath}`;
   
-  // Use HTTPS in production
-  const protocol = process.env.NODE_ENV === 'production' ? 'https' : req.protocol;
+  // Always use HTTPS in production
+  const protocol = (process.env.NODE_ENV === 'production' || process.env.VERCEL) 
+    ? 'https' 
+    : req.protocol;
+  
   const baseUrl = `${protocol}://${req.get('host')}`;
   return `${baseUrl}/${finalPath}`;
 }
 
 /**
- * Generate initials avatar URL (for use when no profile picture)
+ * Generate initials avatar URL
  */
 function getInitialsAvatar(firstName, lastName, size = 128) {
   const name = `${firstName || ''} ${lastName || ''}`.trim();
@@ -124,12 +130,12 @@ function getFileExtension(mimetype) {
   return extensions[mimetype] || 'jpg';
 }
 
-// Export all functions
 module.exports = {
   getAvatarUrl,
   formatPathForDatabase,
   getCompleteFileUrl,
   getInitialsAvatar,
   isValidImage,
-  getFileExtension
+  getFileExtension,
+  getSecureBaseUrl
 };

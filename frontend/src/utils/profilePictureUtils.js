@@ -1,9 +1,15 @@
 
-// ✅ Get the base URL without /api for static files
 const getBaseUrl = () => {
   const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
   // Remove /api from the end if it exists
-  return apiUrl.replace(/\/api\/?$/, '');
+  let baseUrl = apiUrl.replace(/\/api\/?$/, '');
+  
+  // Force HTTPS in production
+  if (process.env.NODE_ENV === 'production') {
+    baseUrl = baseUrl.replace(/^http:/, 'https:');
+  }
+  
+  return baseUrl;
 };
 
 const BASE_URL = getBaseUrl();
@@ -16,7 +22,6 @@ const BASE_URL = getBaseUrl();
  * @returns {string} Full URL to the avatar image
  */
 export const getAvatarUrl = (userOrPath, firstName, lastName) => {
-    
   let profilePicture, fName, lName;
   
   // Handle both object parameter and separate parameters
@@ -30,44 +35,40 @@ export const getAvatarUrl = (userOrPath, firstName, lastName) => {
     lName = lastName;
   }
   
-      
   // If profile picture exists
   if (profilePicture && typeof profilePicture === 'string' && profilePicture.trim()) {
-    // Already a full URL
+    // Already a full URL - ensure HTTPS
     if (profilePicture.startsWith('http://') || profilePicture.startsWith('https://')) {
-            return profilePicture;
+      return profilePicture.replace(/^http:/, 'https:');
     }
     
     // Relative path starting with uploads/
     if (profilePicture.startsWith('uploads/')) {
-      const url = `${BASE_URL}/${profilePicture}`;
-            return url;
+      return `${BASE_URL}/${profilePicture}`;
     }
     
     // Just filename (e.g., "profiles/profile-123.jpg")
-    const url = `${BASE_URL}/uploads/${profilePicture}`;
-        return url;
+    return `${BASE_URL}/uploads/${profilePicture}`;
   }
   
   // Fallback to initials avatar
   if (fName || lName) {
-    const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(fName || '')}+${encodeURIComponent(lName || '')}&background=random&size=128`;
-        return fallback;
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(fName || '')}+${encodeURIComponent(lName || '')}&background=random&size=128`;
   }
   
   // Default avatar
-  const defaultUrl = `https://ui-avatars.com/api/?name=User&background=random&size=128`;
-    return defaultUrl;
+  return `https://ui-avatars.com/api/?name=User&background=random&size=128`;
 };
 
 /**
  * Handle image loading errors with fallback
  */
 export const handleImageError = (e, firstName, lastName) => {
-    const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(firstName || 'User')}+${encodeURIComponent(lastName || 'Name')}&background=random&size=128`;
+  const fallbackUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(firstName || 'User')}+${encodeURIComponent(lastName || 'Name')}&background=random&size=128`;
   
+  // Prevent infinite loop
   if (e.target.src !== fallbackUrl) {
-        e.target.src = fallbackUrl;
+    e.target.src = fallbackUrl;
   }
   e.target.onerror = null;
 };
@@ -78,9 +79,9 @@ export const handleImageError = (e, firstName, lastName) => {
 export const getFileUrl = (filePath) => {
   if (!filePath) return '';
   
-  // Handle full URLs
+  // Handle full URLs - ensure HTTPS
   if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-    return filePath;
+    return filePath.replace(/^http:/, 'https:');
   }
   
   // Clean path
